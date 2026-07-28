@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use JuliassicPark.jl in your research, please cite the software using the metadata below."
+title: "JuliassicPark.jl: A flexible Julia package for evolutionary simulations"
+type: software
+version: 0.1.3
+license: MIT
+
+authors:
+  - given-names: "Cedric"
+    family-names: "Perret"
+
+abstract: >-
+  JuliassicPark.jl is a flexible Julia package for simulating evolutionary
+  models with customizable fitness functions, reproduction processes,
+  mutation, migration, parameter sweeps, and automatic data output.
+
+repository-code: "https://github.com/CedricPerret/JuliassicPark"
+
+keywords:
+  - evolutionary modelling
+  - evolutionary simulation
+  - Julia
+  - population genetics
+  - cultural evolution
