@@ -47,8 +47,7 @@ That is enough to run. You can later adjust simulation settings in the parameter
 ```julia
 function gaussian_fitness_function(z::Number; optimal, sigma, args...)
     fitness = exp(-(z - optimal)^2 / sigma^2)
-    distance_to_optimal = (z - optimal)^2
-    return fitness, distance_to_optimal
+    return fitness
 end
 
 parameters_example = (
@@ -68,11 +67,11 @@ The **fitness function** is the only function you must write as code! Reproducti
 
 ## Examples
 
-Examples are provided in the `basic_examples/` folder of the repository. They show how to set up different evolutionary scenarios, explore model options, and analyse or plot results. We recommend reading them together with this README, as they illustrate in practice the different features and possibilities described here.
+Examples are provided in the `basic_examples/` folder of the repository. I recommend reading them together with this README, as they illustrate in practice the different features and possibilities described here.
 
 Note that:
-- The example file is plain `.jl` script but it is meant to be run step by step like a notebook (as you might do in R). This can easily be done in VS Code: open the file and run the current line or selection with Shift+Enter.
-- These examples use additional packages such as `Plots.jl` and `DataFramesMeta.jl`. They are **not required** for running JuliassicPark itself, but you may need to install them separately if you want to reproduce the example figures.
+- The example file is plain `.jl` script but it is meant to be run step by step like a notebook (as in R).
+- These examples use additional packages such as `Plots.jl` and `DataFramesMeta.jl`. They are **not required** for running JuliassicPark itself, but you need to install them if you want to reproduce the example figures.
 
 ---
 
@@ -84,128 +83,95 @@ If you run into errors, unexpected behaviour, or have suggestions, please open a
 
 ---
 
-## Core concepts
+## Tutorial
 
----
+To build an evolutionary model, you need to define the trait(s) that evolve, what happens at each generation and thus how they affect fitness, how the population reproduces, and what you want to measure.
+
+### Defining traits
+
+Traits are specified through the parameters `:z_ini` and, when needed, `:boundaries`.
+
+The values in `:z_ini` determine the type of trait:
+- **Boolean** (`true` or `false`) for a discrete trait with two possible values.
+- **Integer** (`0`, `1`, `2`, …) for a discrete trait with multiple possible values.
+- **Float** (`0.2`, `1.5`, …) for a continuous trait.
+
+The form of `:z_ini` determines how the initial population is generated:
+- **Single value** — all individuals receive the same initial trait value.  
+- **Vector** — trait values are drawn randomly (with replacement) from the vector.  
+- **Distribution** (from *Distributions.jl*) — trait values are sampled from the distribution, truncated to the interval defined by `:boundaries`. 
+- **DataFrame** — a table with columns `:gen`, `:patch`, and `:z` (or `:z1`, `:z2`, … for multiple traits). The last generation in the table is used as the initial population.
+
+The values in `:boundaries` determine the range of possible trait values by giving a minimum and a maximum (e.g. `(1, 5)` → {1,2,3,4,5}). This is not required for Boolean traits. 
+
+Multiple traits are supported and are internally represented as a tuple, for example `(z1, z2, z3)`.  For details, see [Multiple Traits](#multiple-traits).
 
 
-### Fitness Function
+### What happens at each generation
 
-Your custom fitness function is the only part you must code yourself. It should follow this structure:
+What happens at each generation is specified by writing a fitness function. A fitness function can be written for:
+- **One individual**: takes one individual and returns that individual’s fitness. Do this when *fitness depends only on the focal individual*.
+- **One group**: takes a vector of individuals and returns one fitness value per individual in that group. Do this when *fitness depends on interactions within a group*.
+- **The whole metapopulation**: takes a vector of groups and returns one fitness value for each individual in each group. Do this when *fitness depends on interactions between groups*.
 
+Regardless of the scale, the package will take care of applying the function across the whole population.
+
+The fitness function should follow this structure:
 ```julia
 function my_fitness_function(trait; param1, param2, kwargs...)
     fitness = ...  # compute fitness
     return fitness
 end
 ```
-
-- It **must take as its first argument the trait representing the evolving entity.** This can be a single individual’s trait, a group represented as a vector, or an entire metapopulation represented as a vector of vector.  
+- It **must have a single non-keyword argument** (that is, a single argument before `;`). This represents the trait value(s): a scalar or tuple for a single individual, a vector for a group, or a vector of vectors for an entire metapopulation.  
 - It **must take any additional parameters as keyword arguments** (after `;`).  
-- It **must return fitness as the first output**. The fitness must match the structure of the input trait (individual, group, or metapopulation).  
+- It **must have `kwargs...` at the end of its parameter list**.  
+- It **must return fitness as the first output**. The fitness must match the structure of the input trait (scalar, vector, or vector of vectors).  
+
+To avoid ambiguity, **specify the expected type explicitly** for the first argument trait (for example `Number`, `Tuple`, `Vector`, or `Vector{<:Vector}`). Otherwise, the package will try to infer it automatically, and if there is an error inside the fitness function, the error may show up in confusing places rather than pointing to the real cause. 
 
 
-#### Different levels
+### Reproduction
 
-The code supports fitness functions defined at different levels:
-
-- **Individual level**: takes a single trait value and returns the fitness of that individual.  
-- **Population level**: takes a vector of trait values and returns one fitness per individual in the population.  
-- **Metapopulation level**: takes a vector of groups (vector of vectors) and returns a vector of vectors of fitness for all individuals across groups.
-
-Choose the level that matches your model. If fitness depends only on the individual, you can define the function for a single trait. If it depends on within-group interactions, you need to define it at the population level. If it depends on interactions between groups, you need to define it at the metapopulation level.
-
-
-To avoid ambiguity, it is recommended to **specify the expected input type explicitly** (for example `Number`, `Tuple`, `Vector`, or `Vector{<:Vector}`). If you do not, the system will try to guess the level by trial and error. In that case, if there is a mistake inside the fitness function, the error may show up in confusing places rather than pointing to the real cause. Being explicit makes your function **safer** (errors are caught in the right place) and often **faster** (Julia can optimize code more effectively when types are clear).
-
-
-#### Optional extra outputs
-Your fitness function can return extra values (e.g. summary statistics). These are automatically saved if they match a supported resolution: individual-level, patch-level, or generation-level. You can return them as a tuple:
+The reproduction function defines how the next generation is produced. Several standard methods are build in and can be seen with their requirements using:
 
 ```julia
-return fitness, extra1, extra2
+list_reproduction_methods() ## To see the list and requirements
+list_reproduction_functions() ## To access directly the functions
 ```
-
-or as a named tuple:
-
-```julia
-return (; fitness, extra1, extra2)
-```
-
-If you use a named tuple, field names are used as column names in the output. Otherwise, you must provide names using the `:other_output_names` parameter (see [Output](#output)).
-
----
-
-### Parameters
-
-All simulation settings are stored in a single `parameters` argument, which can be a `Dict` or a `NamedTuple`.  
-Within this container, parameters can play different roles:
-
-1. **Trait parameters** — define the evolving traits (initial values, mutation rules).  
-2. **Fitness parameters** — used by your fitness function (e.g. `optimal`, `sigma`).  
-3. **Simulation parameters** — control the simulation engine (e.g. number of generations, population size, number of replicates).  
-
-These are not separate categories in the code: all of them are just fields in the same dictionary (or NamedTuple).  
-
-You must always provide trait parameters and any fitness parameters required by your model.
-Simulation parameters already exist by default. Their names and purposes are listed in the complete [list of parameters](#list-of-parameters). To override a simulation parameter, simply assign it a new value in `parameters`.
-
-### Traits
-
-Traits represent the heritable characteristics that evolve in your model. Traits can be of different types, depending on how you want to represent strategies or phenotypes:
-
-- **Discrete traits (two possible values)** are encoded as Boolean — e.g. `true = cooperator`, `false = defector`.  
-- **Discrete traits (N possible values)** are encoded as Integer — e.g. `0 = defector`, `1 = cooperator`, `2 = tit-for-tat`.  
-- **Continuous traits** are encoded as Float — e.g. `0.3 = contribution to a public good`.  
-
-Multiple traits are supported and are internally represented as a tuple, for example `(z1, z2, z3)`.  For details on multi-trait initialization, parameters, and indexing inside the fitness function, see [Multiple Traits](#multiple-traits).
-
-#### Specifying the traits
-
-The type and number of traits are inferred automatically from the initial value given in `:z_ini`.  
-For example:  
-- `z_ini = 0.2` → one continuous trait,  
-- `z_ini = (0.5, 2)` → two traits, one continuous and one discrete.
-
-#### Initialising trait values
-
-Beyond defining the type, the format of `:z_ini` also determines how initial values are assigned across the population:
-
-- **Real** — all individuals receive the same initial trait value.  
-- **Vector** — each individual’s trait is drawn at random from the vector.  
-- **Distribution** (from *Distributions.jl*) — trait values are sampled from the distribution. If `:boundaries` are given, sampling is truncated to that interval.  
-- **DataFrame** — a table with columns `:gen`, `:patch`, and `:z` (or `:z1`, `:z2`, … for multiple traits). The last generation in the table is used as the initial population.
-
-#### Mutation parameters
-
-Each trait must have associated mutation parameters, which define how it changes when mutation occurs. At minimum, you must provide the mutation probability during reproduction `mu_m`. Additional parameters required depend on the trait type:
-
-| Trait type   | The effect of a mutation event                                           | Required fields |
-|--------------|---------------------------------------------------------------|-----------------|
-| **Discrete with two values (Boolean)**  | Flips the value (`true` ↔ `false`).                           | none            |
-| **Discrete with multiple values (Integer)**  | Replaced by another integer within the allowed range.         | `:boundaries` — tuple or vector specifying the possible values (e.g. `(1, 5)` → {1,2,3,4,5}) |
-| **Continuous (Float)**    | New value drawn from a truncated distribution within `:boundaries`. <br>Uses a **Normal distribution** if `:mutation_type = :normal` or if `:mutation_type` is omitted. <br>Uses a **Gumbel distribution** if `:mutation_type = :gumbel` (biased mutation). | Always: `:boundaries` <br> If `:mutation_type = :normal`: `:sigma_m` (standard deviation). <br> If `:mutation_type = :gumbel`: `:sigma_m` and `:bias_m` (directional bias). |
-
----
-
-### 🔁 Reproduction function
-
-The reproduction function defines how the next generation is produced. Several standard methods are included. You can see the full list with their requirements using:
-
-```julia
-list_reproduction_methods()
-```
-
-You can access directly the list of function using `list_reproduction_functions()`.
-
 Some of the most commonly used are:
 
-- `reproduction_WF` — Wright–Fisher reproduction. Non-overlapping generation.  
+- `reproduction_WF!` — Wright–Fisher reproduction. Non-overlapping generation.  
 - `reproduction_Moran_DB!` — Moran process, death–birth update.  Overlapping generation
 - `reproduction_explicit_poisson` — explicit offspring number, drawn from a Poisson distribution.  
 - `reproduction_WF_sexual` — Wright–Fisher reproduction with sexual recombination (diploid, multilocus).  
 
 Note that we use the term *reproduction* in a broad sense. It can also represent processes such as learning or cultural transmission. For instance ``reproduction_Moran_pairwise_learning!`` is the function classicaly used in models with pairwise learning e.g. Traulsen et al, (2006).
+
+### Mutation
+
+A key element of an evolutionary model is that trait can mutate. At minimum, you must provide the mutation probability during reproduction, `mu_m`. The effect of mutation depends on the trait type:
+
+- **Discrete traits with two values (Boolean)** — the value is flipped (`true` ↔ `false`).  
+- **Discrete traits with multiple values (Integer)** — the value is replaced by another integer within the allowed range.  
+- **Continuous traits (Float)** — a new value is drawn from a truncated distribution within `:boundaries`. By default, mutations follow a Normal distribution and require `:sigma_m` as the standard deviation. If `:mutation_type = :gumbel`, you must also provide `:bias_m`.
+
+### Running simulation
+
+To run simulations, in addition to defining traits with `z_ini` and the related mutation parameters, you need to provide any arguments used by your fitness function (e.g. `optimal`, `sigma`).
+
+Simulation parameters are built in and already have default values. Their names and purposes are listed in the complete [list of parameters](#list-of-parameters), and can also be inspected with:
+```julia
+print_default_parameters()         # Print default values
+get_default_parameters()           # Access current defaults
+```
+To change a simulation parameter for a given run, simply assign it a new value in `parameters`. To change the defaults more generally, use:
+```julia
+set_default_parameters!(...)       # Override defaults globally
+reset_default_parameters!()        # Reset to built-in defaults
+```
+For instance, To run replicated simulations, simply set the parameter `:n_simul` to the desired number of replicates.
+
 
 ---
 
@@ -214,13 +180,24 @@ Note that we use the term *reproduction* in a broad sense. It can also represent
 `evol_model` returns a `DataFrame`. Each row corresponds to a generation (`:de = 'g'`), a patch (`:de = 'p'`), or an individual (`:de = 'i'`), depending on the value of the `:de` parameter.  
 Results are saved starting from generation `:n_print`, and then every `:j_print` generations.
 
-Each row includes:
+By default, each row includes:
 - The simulation ID (also used as the random seed, ensuring reproducibility)
 - The patch ID (if `:de = 'p'` or `:de = 'i'`)  
 - The individual ID (if `:de = 'i'`)  
 - The trait value(s)  
-- Any extra variables returned by the fitness function
+- The fitness values
 
+You can save other variables by computing them in the fitness function and adding them to the return of the fitness function
+```julia
+return fitness, extra1, extra2
+```
+or as a named tuple:
+```julia
+return (; fitness, extra1, extra2)
+```
+If you use a named tuple, field names are used as column names in the output. Otherwise, you can provide names using the `:other_output_names` parameter (see [Output](#output)). If no names are provided, the extra variables are named `V1`, `V2`, and so on.
+
+Extra variables measured need to match one of the resolution: one value per individual, per patch or per generation. 
 
 An example output with a single trait `z`, one extra variable `distance_to_optimal`, a population structured in two groups of size 2, two generations and individual-level resolution (`:de = 'i'`) is:
 
@@ -236,15 +213,9 @@ An example output with a single trait `z`, one extra variable `distance_to_optim
 | 2   | 42      | 2     | 4   | 0.57  | 0.6130  | 0.0049              |
 
 
-#### Naming of extra variables
-
-Column names for extra variables are determined in the following priority order:
-1. If `:other_output_name` is specified, those names are used.  
-2. If the fitness function returns a named tuple, its keys are used.  
-3. Otherwise, remaining variables are labeled `V1`, `V2`, etc.  
-
 #### Resolution handling
 
+You can choose if you want values at the level of 
 The engine adapts variables to match the chosen resolution:  
 
 - If the desired resolution (`:de`) is **higher** than the variable (e.g. `:de = 'p'` and the variable is individual-level), values are **averaged** and names are changed accordingly.
@@ -294,12 +265,6 @@ If `z_ini` is provided as a `DataFrame`, the model uses the last generation in t
 The output is another `DataFrame` that appends the new simulation to the original one, with generation numbers continuing from the last row.
 
 This makes it easy to simulate **parameter changes over time**. You can run the model once, then use the resulting `DataFrame` as input for another run with different parameters, and the generations will continue seamlessly.
-
-### Replicated runs
-
-To run replicated simulations, simply set the parameter `:n_simul` to the desired number of replicates.
-
-When writing results to disk, you can use `:split_simul = true` to save each replicate in a separate file. See [Parallelisation and output splitting](#-Parallelisation-and-output-splitting) for more details on saving and splitting.
 
 ---
 
@@ -651,16 +616,7 @@ Besides parameters you need for your custom fitness function, these are the para
 :simplify                  => Flatten population if there is a single patch
 ```
 
-### Default Parameters
 
-The parameters in previous list have reasonable defaults. You can inspect or modify them globally:
-
-```julia
-print_default_parameters()         # Print default values
-get_default_parameters()           # Access current defaults
-set_default_parameters!(...)       # Override defaults globally
-reset_default_parameters!()        # Reset to built-in defaults
-```
 
 ---
 

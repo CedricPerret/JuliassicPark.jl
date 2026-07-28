@@ -348,37 +348,40 @@ function _reproduction_WF_patchwise!(pop::Vector{Vector{T}},new_pop::Vector{Vect
     return nothing
 end
 
+
 """
-    reproduction_WF_island_model_hard_selection(pop, fitness, str_selection, mu_m, mut_kwargs; mig_rate, kwargs...)
+    reproduction_WF_island_model_fixed_migrant_fraction(pop, fitness, str_selection, mu_m, mut_kwargs; mig_rate, kwargs...)
 
-Simulates **Wright–Fisher reproduction with hard selection and island-model migration** in a structured population.
+Simulates **Wright–Fisher reproduction with a fixed expected migrant fraction** in a structured population.
 
-For each individual:
-1. Decide whether the offspring is philopatric or a migrant (with probability `mig_rate`).
-2.a If philopatric, sample a parent from the same group with probability ∝ `fitness^str_selection`.
-2.b If migrant, sample a parent from the global pool (excluding the focal group) with probability ∝ `fitness^str_selection`.
-4. Apply mutation to the offspring in place using `mutation!`.
+For each offspring position in a focal group:
 
-This implements a **hard selection** regime: migrants compete across groups.
+1. With probability `1 - mig_rate`, the offspring is philopatric and its parent is sampled from the focal group with probability proportional to `fitness^str_selection`.
+2. With probability `mig_rate`, the offspring is a migrant and its parent is sampled from the pooled population of all other groups with probability proportional to `fitness^str_selection`.
+3. Mutation is applied to the resulting offspring.
+
+This procedure fixes the expected proportion of migrant offspring at `mig_rate`. Parents from different nonlocal groups compete with one another for migrant positions, but local and nonlocal parents do not compete for the same offspring position.
 
 !!! note
-    - Population size remains constant.
-    - Migration is uniform across groups.
-    - Reproduction is asexual. See `reproduction_WF_sexual_multilocus` for sexual reproduction.
+    - Total population size and group sizes remain constant.
+    - `mig_rate` is the probability that an offspring position is filled by a migrant.
+    - Migration is symmetric across groups.
+    - Reproduction is asexual.
+    - At least two groups are required when `mig_rate > 0`.
 
 # Arguments
 - `pop::Vector{Vector{T}}`: Trait values for individuals in each group.
 - `fitness::Vector{Vector{Float64}}`: Corresponding fitness values.
-- `str_selection::Float64`: Selection strength (exponent applied to fitness).
+- `str_selection::Float64`: Selection strength, used as an exponent applied to fitness.
 - `mu_m`: Mutation probability.
 - `mut_kwargs`: Keyword arguments passed to `mutation!`.
 
 # Keyword Arguments
-- `mig_rate::Float64`: Probability that an offspring is a migrant.
-- `kwargs...`: Additional arguments passed to `mutation!`.
+- `mig_rate::Float64`: Probability that an offspring position is filled by a migrant.
+- `kwargs...`: Additional keyword arguments accepted for interface compatibility.
 
 # Returns
-- `Vector{Vector{T}}`: New structured population after reproduction and migration, with the same grouping.
+- `Vector{Vector{T}}`: New structured population after reproduction, migration, and mutation, with the same grouping.
 
 # Example
 ```julia
@@ -388,10 +391,14 @@ mu_m = 0.1
 str_selection = 1.0
 mut_kwargs = (; sigma_m = 0.5, boundaries = (0.0, 5.0))
 
-new_pop = reproduction_WF_island_model_hard_selection(pop, fitness, str_selection, mu_m, mut_kwargs; mig_rate = 0.1)
+new_pop = reproduction_WF_island_model_fixed_migrant_fraction(
+    pop, fitness, str_selection, mu_m, mut_kwargs;
+    mig_rate = 0.1
+)
 ```
 """
-function reproduction_WF_island_model_hard_selection(pop::Vector{Vector{T}},fitness::Vector{Vector{Float64}},str_selection::Float64,mu_m, mut_kwargs; mig_rate, kwargs...) where T
+
+function reproduction_WF_island_model_fixed_migrant_fraction(pop::Vector{Vector{T}},fitness::Vector{Vector{Float64}},str_selection::Float64,mu_m, mut_kwargs; mig_rate, kwargs...) where T
     group_size = length(pop[1]) ; n_groups = length(pop);
     correct_fitness!(fitness,str_selection)
     migrants_flag=[rand(group_size) .< mig_rate for i in 1:n_groups]
@@ -405,7 +412,7 @@ function reproduction_WF_island_model_hard_selection(pop::Vector{Vector{T}},fitn
     return(new_pop)
 end
 
-function reproduction_WF_island_model_hard_selection!(pop::Vector{Vector{T}},new_pop::Vector{Vector{T}},fitness::Vector{Vector{Float64}},str_selection::Float64,mu_m, mut_kwargs; mig_rate, kwargs...) where T
+function reproduction_WF_island_model_fixed_migrant_fraction!(pop::Vector{Vector{T}},new_pop::Vector{Vector{T}},fitness::Vector{Vector{Float64}},str_selection::Float64,mu_m, mut_kwargs; mig_rate, kwargs...) where T
     group_size = length(pop[1]) ; n_groups = length(pop);
     #--- Prep fitness
     correct_fitness!(fitness,str_selection)
@@ -473,18 +480,110 @@ function reproduction_WF_island_model_hard_selection!(pop::Vector{Vector{T}},new
     return nothing
 end
 
+"""
+    reproduction_WF_island_model_hard_selection!(pop, fitness, str_selection, mu_m, mut_kwargs; mig_rate, kwargs...)
+
+Simulates **Wright–Fisher reproduction with hard selection and island-model migration** in a structured population.
+
+All individuals compete for each breeding spot. The weight of each potential parent is given by its fitness, multiplied by a factor determined by its source group:
+1. Individuals from the target group receive weight `(1 - mig_rate) * fitness^str_selection`.
+2. Individuals from each other group receive weight `(mig_rate / (n_groups - 1)) * fitness^str_selection`.
+3. The offspring of the target group are sampled from this single weighted parent pool.
+4. Mutation is applied to the offspring.
+
+This implements a **hard-selection regime** because local and nonlocal parents compete in the same lottery. Consequently, groups with greater total fitness can contribute more offspring to the next generation.
+
+For efficiency, the population is flattened once. For each target group, a corresponding flat vector of parent weights is generated and used to sample a complete group of offspring.
+
+!!! note
+    - Total population size and group sizes remain constant.
+    - All groups are assumed to have the same size.
+    - Migration is symmetric across groups.
+    - `mig_rate` weights the contribution of nonlocal parents; it is not necessarily the expected realised fraction of migrants.
+    - Reproduction is asexual.
+
+# Arguments
+- `pop::Vector{Vector{T}}`: Trait values for individuals in each group.
+- `fitness::Vector{Vector{Float64}}`: Corresponding fitness values.
+- `str_selection::Float64`: Selection strength, used as an exponent applied to fitness.
+- `mu_m`: Mutation probability.
+- `mut_kwargs`: Keyword arguments passed to `mutation!`.
+
+# Keyword Arguments
+- `mig_rate::Float64`: Weight assigned to nonlocal parental contributions relative to local contributions.
+- `kwargs...`: Additional keyword arguments accepted for interface compatibility.
+
+# Returns
+- `Vector{Vector{T}}`: New structured population after reproduction and mutation, with the same grouping.
+
+# Example
+```julia
+pop = [fill(i, 100) .+ 0.01 * collect(1:100) for i in 1:5]
+new_pop = [zeros(Float64,100) for i in 1:5]
+fitness = [rand(100) for _ in 1:5]
+mu_m = 0.1
+str_selection = 1.0
+mut_kwargs = (; sigma_m = 0.5, boundaries = (0.0, 5.0))
+
+reproduction_WF_island_model_hard_selection!(
+    pop, new_pop, fitness, str_selection, mu_m, mut_kwargs;
+    mig_rate = 0.1
+)
+```
+"""
+function reproduction_WF_island_model_hard_selection!(pop::Vector{Vector{T}},new_pop::Vector{Vector{T}},fitness::Vector{Vector{Float64}},str_selection::Float64,mu_m, mut_kwargs; mig_rate, kwargs...) where T
+    group_size = length(pop[1]) ; n_groups = length(pop);
+    #--- Special case: one group only
+    if n_groups == 1
+        reproduction_WF!(pop[1],new_pop[1],fitness[1],str_selection,mu_m,mut_kwargs;kwargs...)
+        return nothing
+    end
+
+    #--- Prep fitness
+    correct_fitness!(fitness,str_selection)
+
+    #--- Flatten the population into a single global parent pool
+    flat_pop = reduce(vcat,pop)
+
+    #--- Buffer for the weighted fitness of all possible parents
+    #@ The order corresponds to flat_pop: group 1, group 2, ..., group n_groups
+    flat_fitness_with_mig = Vector{Float64}(undef, group_size * n_groups)
+
+    #--- For each target group...
+    for i in 1:n_groups
+        #--- Build the parent weights for the target group
+        for j in 1:n_groups
+            #@ This form was empirically faster than assigning fitness and multiplying in place
+            if i == j
+                flat_fitness_with_mig[((j-1)*group_size + 1):(j*group_size)] .= fitness[j] .* (1 - mig_rate)
+            else
+                flat_fitness_with_mig[((j-1)*group_size + 1):(j*group_size)] .= fitness[j] .* (mig_rate / (n_groups - 1))
+            end
+        end
+        #--- Draw all offspring from the single weighted parent pool
+        safe_sample!(flat_pop, StatsBase.Weights(flat_fitness_with_mig), new_pop[i])
+    end
+    #--- Mutate
+    mutation!(new_pop,mu_m;mut_kwargs...)
+    return nothing
+end
 
 """
     reproduction_WF_island_model_soft_selection(pop, fitness, str_selection, mu_m, mut_kwargs; mig_rate, kwargs...)
 
-Simulates **Wright–Fisher reproduction with soft selection and island-model migration** in a structured population.
+Simulates Wright–Fisher reproduction with **soft selection** and island-model migration in a structured population.
 
-Reproduction occurs **within each group independently** (soft selection), followed by migration:
-1. Each group produces its own offspring using Wright–Fisher reproduction (selection + mutation).
-2. A proportion `mig_rate` of individuals in each group are replaced by migrants from other groups.
-3. For each migrant, the parent is drawn from a **random other group**, chosen within that group **proportionally to fitness**.
+Under soft selection, competition is **local**: for each offspring position in a focal group, the parent is chosen
+1. from the same group with probability `1 - mig_rate`, with sampling probability proportional to fitness within that group; or
+2. from a randomly chosen other group with probability `mig_rate`, with the parent then sampled proportionally to fitness within that source group.
 
-This corresponds to a **soft selection** regime: competition is local, and each group contributes equally to the next generation.
+This is a soft-selection scheme because selection is always evaluated **within groups**, and each group contributes the same number of offspring slots to the next generation.
+
+For efficiency, this is implemented in a different way:
+1. Each group first produces a full new generation independently using Wright–Fisher reproduction within the group.
+2. Then, a subset of offspring positions (determined by `mig_rate`) is replaced by immigrants drawn from other groups.
+
+This is usually faster as mig_rate tends to be low. 
 
 !!! note
     - Maintains constant group sizes.
@@ -821,7 +920,8 @@ _REPRO_FUNS = [
     (name = :reproduction_WF,                       f = reproduction_WF,                       desc = "Wright–Fisher reproduction",                          needs = Symbol[],                    applies_to = :both),       # has Vector and Vector{Vector} methods
     (name = :reproduction_WF!,                      f = reproduction_WF!,                      desc = "Wright–Fisher reproduction (in-place)",               needs = Symbol[],                    applies_to = :both),       # has Vector and Vector{Vector} methods
 
-    (name = :reproduction_WF_island_model_hard_selection,  f = reproduction_WF_island_model_hard_selection,  desc = "Island model, hard selection, global competition", needs = [:mig_rate],              applies_to = :metapop),    # metapop only
+    (name = :reproduction_WF_island_model_fixed_migrant_fraction,  f = reproduction_WF_island_model_fixed_migrant_fraction,  desc = "Island model, fixed fraction, global competition", needs = [:mig_rate],              applies_to = :metapop),    # metapop only
+    (name = :reproduction_WF_island_model_fixed_migrant_fraction!, f = reproduction_WF_island_model_fixed_migrant_fraction!, desc = "Island model, fixed fraction, global competition (in-place)", needs = [:mig_rate], applies_to = :metapop),    # metapop only
     (name = :reproduction_WF_island_model_hard_selection!, f = reproduction_WF_island_model_hard_selection!, desc = "Island model, hard selection, global competition (in-place)", needs = [:mig_rate], applies_to = :metapop),    # metapop only
     (name = :reproduction_WF_island_model_soft_selection,  f = reproduction_WF_island_model_soft_selection,  desc = "Island model, soft selection, local competition",  needs = [:mig_rate],              applies_to = :metapop),    # metapop only
     (name = :reproduction_WF_island_model_soft_selection!, f = reproduction_WF_island_model_soft_selection!, desc = "Island model, soft selection, local competition (in-place)",  needs = [:mig_rate], applies_to = :metapop),    # metapop only
