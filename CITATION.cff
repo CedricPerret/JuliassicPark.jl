@@ -14,7 +14,7 @@ abstract: >-
   models with customizable fitness functions, reproduction processes,
   mutation, migration, parameter sweeps, and automatic data output.
 
-repository-code: "https://github.com/CedricPerret/JuliassicPark"
+repository-code: "https://github.com/CedricPerret/JuliassicPark.jl"
 
 keywords:
   - evolutionary modelling
