@@ -281,7 +281,8 @@ function preprocess_fitness_function(population, fitness_function,parameters, co
         ##If multiple output,  invert so that we have a vector by output rather by individual [(o1_ind1,o2_ind1),(o1_ind2,o2_ind2)] => ([o1_ind1, o2_ind1], [o2_ind1, o2_ind2])
         instanced_fitness_function = function(population; parameters...)
             #_my_invert(collect.(ensure_tuple.(fitness_function.(population; parameters...))))
-            collect(_my_invert(ensure_tuple.(fitness_function.(population; parameters...))))
+            collect(invert(ensure_tuple.(fitness_function.(population; parameters...))))
+            #collect(_my_invert(ensure_tuple.(fitness_function.(population; parameters...))))
         end
     elseif correction == 0
         ##If single output,  vectorize if to put it as the only element of the vector output [o1_ind1,o1_ind2] => [[o1_ind1,o1_ind2]]
