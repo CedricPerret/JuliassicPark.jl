@@ -350,22 +350,16 @@ function run_parameter_sweep_distributed(fun, sweep, parameters)
         else
             #-> Use threads to parallelise over simulations
             for i in 1:n
-                # Each thread appends to its own slot
-                #Thread local contains for each element a vector of dataframe for the output of each thread. We will later concatenate them together but it allows the threads to work independently.
-                thread_local = Vector{Vector{DataFrame}}(undef, Threads.nthreads())
-                for t in 1:Threads.nthreads()
-                    thread_local[t] = Vector{DataFrame}()
-                end
+                simulation_results = Vector{DataFrame}(undef, parameters[:n_simul])
 
-                Threads.@threads for i_simul in 1:parameters[:n_simul]
+                Threads.@threads for i_simul in eachindex(simulation_results)
                     id_simul = get_simulation_seed(parameters, i_simul)
-                    sim_res = fun(list_parameters_set[i], id_simul)
-                    push!(thread_local[Threads.threadid()], sim_res)
+                    simulation_results[i_simul] = fun(list_parameters_set[i], id_simul)
                     next!(p)
                 end
 
                 # Concatenate results from all threads
-                i_res = vcat(vcat(thread_local...)...)  
+                i_res = vcat(simulation_results...)
                 if n > 1
                     list_res[i] = hcat(repeat(sweep_df[i:i, :], inner = nrow(i_res)), i_res)
                 else
