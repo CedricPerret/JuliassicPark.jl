@@ -1,6 +1,6 @@
 name = "JuliassicPark"
 uuid = "f1e977c7-1234-4567-b89a-aabbccddeeff"
-version = "0.2.1"
+version = "0.2.2"
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
