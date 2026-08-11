@@ -410,7 +410,7 @@ This is useful when parameters should vary in parallel rather than independently
 
 #### Output
 
-By default, all results are returned in a single DataFrame. If `:split_sweep = true`:
+By default, all results are returned in a single DataFrame, with each varying parameter included as a separate column. If `:split_sweep = true`:
 - With `:write_file = false`, the function returns a list of DataFrames, one per parameter set.
 - With `:write_file = true`, each parameter set is saved to a separate file.
 
