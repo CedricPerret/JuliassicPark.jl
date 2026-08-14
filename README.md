@@ -458,7 +458,7 @@ addprocs(4)  # or what your machine or cluster provides
 # Put your model code in a file so it can be loaded everywhere.
 @everywhere include("my_model_code.jl")
 ```
-
+This includes any user-defined functions used by the model, including functions passed through additional_parameters.
 
 ---
 
