@@ -10,15 +10,6 @@ The goal is simple: spend less time on boilerplate, and more time exploring idea
 
 ---
 
-## Features
-
-- Evolutionary models with support for continuous and discrete traits; single or multiple traits; with phenotype or explicit genotype.
-- Multiple reproduction schemes: Wright–Fisher, Moran, explicit (agent-based), sexual reproduction.
-- Flexible architecture compatible with a wide range of custom fitness functions
-- Automatic result logging and data output for simulation analysis
-
----
-
 ## Installation
 
 Install it from General registry:
@@ -29,24 +20,25 @@ Pkg.add("JuliassicPark")
 ```
 
 ---
-
 ## Quick start
-The main entry point is `evol_model`, which runs a complete evolutionary simulation. The minimum required is to:
+
+The main function is `evol_model`, which runs a complete evolutionary simulation. The minimum required is to:
 
 1. Write a **fitness function** that maps trait values to fitness.
-2. Define **the evolving traits** by setting fields in a parameters dictionary or NamedTuple:
+2. Define **the evolving traits** by setting keys in a dictionary or named tuple:
    - `z_ini`: initial value
    - `mu_m`: mutation rate
    - `sigma_m`: size of mutation steps (for continuous traits)
    - `boundaries`: trait range (for discrete and continuous traits)
-3. Provide values for the **parameters used by your fitness function** by adding them to the same parameters dictionary.
+3. Provide values for the **parameters used by your fitness function** by adding them to the same dictionary or named tuple.
 4. Choose a **reproduction method** that builds the next generation.
 
-That is enough to run. You can later adjust simulation settings in the parameters dictionary, such as the number of generations, population size, number of patches, and the number of replicates. See the complete [list of parameters](#list-of-parameters).
-
+That is enough to run. For example,
 
 ```julia
-function gaussian_fitness_function(z::Number; optimal, sigma, args...)
+using JuliassicPark
+
+function gaussian_fitness_function(z::Number; optimal, sigma, kwargs...)
     fitness = exp(-(z - optimal)^2 / sigma^2)
     return fitness
 end
@@ -59,61 +51,102 @@ parameters_example = (
     optimal = 0.5,
     sigma = 0.1)
 
-res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
+res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF!)
 ```
 
-The **fitness function** is the only function you must write as code! Reproduction methods like `reproduction_WF` are already provided and most parameters have defaults.
+That is the whole model. You get back a tidy `DataFrame`, ready to plot or analyse:
+
+| gen | i_simul | patch | ind |   z   | fitness |
+|-----|---------|-------|-----|-------|---------|
+| 1   | 42      | 1     | 1   | 0.100 | 0.169   |
+| 1   | 42      | 1     | 2   | 0.100 | 0.169   |
+| 2   | 42      | 1     | 1   | 0.104 | 0.175   |
+| 2   | 42      | 1     | 2   | 0.100 | 0.169   |
+| ⋮   | ⋮       | ⋮     | ⋮   | ⋮     | ⋮       |
+
+**From there, a lot is a couple of parameters away.** Add it to the parameters and rerun.
+
+- Want 10 replicates? `n_simul = 10`.
+
+- A population structured in 20 patches of 10? `n_ini = 10`, `n_patch = 20`.
+
+- Mean trait per patch instead of one row per individual? `de = 'p'`. Per generation? `de = 'g'`.
+
+-  Five thousand generations, but saved every hundredth? `n_gen = 5000`, `j_print = 100`.
+
+- Results on disk rather than in memory? `write_file = true`.
+
+- Varying a parameter over a whole range? 
+
+```julia
+res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF!;
+                 sweep = Dict(:sigma => [0.1, 0.2, 0.4, 0.8]))
+```
+
+In every case the output adapts: a column for the replicate or the patch, columns averaged and renamed, a column for whatever you swept.
 
 ---
 
 ## Examples
 
-Examples are provided in the `basic_examples/` folder of the repository. I recommend reading them together with this README, as they illustrate in practice the different features and possibilities described here.
+Examples are provided in the file `examples/basic_example.jl` in the repository. I recommend reading them together with this README, as they illustrate in practice the different features and possibilities described here.
 
 Note that:
-- The example file is plain `.jl` script but it is meant to be run step by step like a notebook (as in R).
+- The example file is a plain `.jl` script but it is meant to be run step by step like a notebook (as in R).
 - These examples use additional packages such as `Plots.jl` and `DataFramesMeta.jl`. They are **not required** for running JuliassicPark itself, but you need to install them if you want to reproduce the example figures.
 
 ---
 
 ## Status and feedback
 
-JuliassicPark is currently in a beta `0.x` stage. The main features are implemented and I use it for my own research, but it has not been heavily tested across a wide range of models.
+JuliassicPark is currently in a beta `0.x` stage. The main features are implemented and it currently handles continuous and discrete traits, single or multiple traits, phenotypes or explicit multilocus genotypes, structured populations, and a range of reproduction schemes (Wright–Fisher, Moran, explicit agent-based, sexual).
 
-If you run into errors, unexpected behaviour, or have suggestions, please open an issue on the GitHub repository or contact me at cedric.perret.research [at] gmail [dot] com.
+I use it for my own research, but it has not been heavily tested across a wide range of models. If you run into errors, unexpected behaviour, or have suggestions, please open an issue on the GitHub repository or contact me at cedric.perret.research [at] gmail [dot] com.
 
 ---
 
 ## Tutorial
 
-To build an evolutionary model, you need to define the trait(s) that evolve, what happens at each generation and thus how they affect fitness, how the population reproduces, and what you want to measure.
+To build an evolutionary model, you need to define four things: the trait(s) that evolve, what happens at each generation which determines fitness, how the population reproduces, and what you want to measure. This section follows that order.
+
+You do that by writing a fitness function, by creating a `Dict` or `NamedTuple` with the relevant keys and values explained below (called `parameters` from here on), and by choosing a reproduction function.
 
 ### Defining traits
 
-Traits are specified through the parameters `:z_ini` and, when needed, `:boundaries`.
+Traits are specified by adding the key `z_ini` and its value to `parameters` and, when needed, `boundaries`.
 
-The values in `:z_ini` determine the type of trait:
-- **Boolean** (`true` or `false`) for a discrete trait with two possible values.
-- **Integer** (`0`, `1`, `2`, …) for a discrete trait with multiple possible values.
-- **Float** (`0.2`, `1.5`, …) for a continuous trait.
+The values of `z_ini` determine the type of trait:
+- **Boolean** (`true`, `false`) for a discrete trait with two possible values, e.g. `true = cooperator`, `false = defector`.
+- **Integer** (`0`, `1`, `2`, …) for a discrete trait with multiple possible values, e.g. `0 = defector`, `1 = cooperator`, `2 = tit-for-tat`.
+- **Float** (`0.2`, `1.5`, …) for a continuous trait, e.g. `0.3 = contribution to a public good`.
 
-The form of `:z_ini` determines how the initial population is generated:
+The type and the number of traits are read directly from `z_ini`: `z_ini = 0.2` gives one continuous trait, `z_ini = (0.5, 2)` gives two traits, one continuous and one discrete.
+
+The form of `z_ini` determines how the initial population is generated:
 - **Single value** — all individuals receive the same initial trait value.  
 - **Vector** — trait values are drawn randomly (with replacement) from the vector.  
-- **Distribution** (from *Distributions.jl*) — trait values are sampled from the distribution, truncated to the interval defined by `:boundaries`. 
-- **DataFrame** — a table with columns `:gen`, `:patch`, and `:z` (or `:z1`, `:z2`, … for multiple traits). The last generation in the table is used as the initial population.
+- **Distribution** (from *Distributions.jl*) — trait values are sampled from the distribution; if `boundaries` is given, sampling is truncated to that interval.
+- **DataFrame** — a table with columns `gen`, `patch`, and `z` (or `z1`, `z2`, … for multiple traits). The last generation in the table is used as the initial population.
 
-The values in `:boundaries` determine the range of possible trait values by giving a minimum and a maximum (e.g. `(1, 5)` → {1,2,3,4,5}). This is not required for Boolean traits. 
+The values of `boundaries` determine the range of possible trait values by giving a minimum and a maximum (e.g. `(1, 5)` → {1,2,3,4,5}). This is not required for Boolean traits. 
 
 Multiple traits are supported and are internally represented as a tuple, for example `(z1, z2, z3)`.  For details, see [Multiple Traits](#multiple-traits).
+
+#### Mutation
+
+A key element of an evolutionary model is that traits can mutate. At minimum, you must provide the mutation probability during reproduction by adding the key `mu_m` and its value to `parameters`. The effect of mutation depends on the trait type:
+
+- **Discrete traits with two values (Boolean)** — the value is flipped (`true` ↔ `false`).  
+- **Discrete traits with multiple values (Integer)** — the value is replaced by another integer within the allowed range.  
+- **Continuous traits (Float)** — a new value is drawn from a truncated distribution within `boundaries`. By default, mutations follow a Normal distribution and require the key `sigma_m` as the standard deviation. If you set `mutation_type = :gumbel`, you must also provide the key `bias_m` and its value.
 
 
 ### What happens at each generation
 
-What happens at each generation is specified by writing a fitness function. A fitness function can be written for:
-- **One individual**: takes one individual and returns that individual’s fitness. Do this when *fitness depends only on the focal individual*.
-- **One group**: takes a vector of individuals and returns one fitness value per individual in that group. Do this when *fitness depends on interactions within a group*.
-- **The whole metapopulation**: takes a vector of groups and returns one fitness value for each individual in each group. Do this when *fitness depends on interactions between groups*.
+What happens at each generation is specified by writing a fitness function. A fitness function takes values of traits and gives back the resulting fitness. It can be written for:
+- **One individual**: takes one individual's traits and returns that individual's fitness. Do this when *fitness depends only on the focal individual*.
+- **One group**: takes a vector of individuals' traits and returns one fitness value per individual in that group. Do this when *fitness depends on interactions within a group*.
+- **The whole metapopulation**: takes a vector of groups of traits and returns one fitness value for each individual in each group. Do this when *fitness depends on interactions between groups*.
 
 Regardless of the scale, the package will take care of applying the function across the whole population.
 
@@ -134,7 +167,7 @@ To avoid ambiguity, **specify the expected type explicitly** for the first argum
 
 ### Reproduction
 
-The reproduction function defines how the next generation is produced. Several standard methods are build in and can be seen with their requirements using:
+The reproduction function defines how the next generation is produced. Several standard methods are built in and can be seen with their requirements using:
 
 ```julia
 list_reproduction_methods() ## To see the list and requirements
@@ -142,49 +175,40 @@ list_reproduction_functions() ## To access directly the functions
 ```
 Some of the most commonly used are:
 
-- `reproduction_WF!` — Wright–Fisher reproduction. Non-overlapping generation.  
-- `reproduction_Moran_DB!` — Moran process, death–birth update.  Overlapping generation
+- `reproduction_WF!` — Wright–Fisher reproduction. Non-overlapping generations.  
+- `reproduction_Moran_DB!` — Moran process, death–birth update.  Overlapping generations.
 - `reproduction_explicit_poisson` — explicit offspring number, drawn from a Poisson distribution.  
 - `reproduction_WF_sexual` — Wright–Fisher reproduction with sexual recombination (diploid, multilocus).  
 
-Note that we use the term *reproduction* in a broad sense. It can also represent processes such as learning or cultural transmission. For instance ``reproduction_Moran_pairwise_learning!`` is the function classicaly used in models with pairwise learning e.g. Traulsen et al, (2006).
+Note that we use the term *reproduction* in a broad sense. It can also represent processes such as learning or cultural transmission. For instance ``reproduction_Moran_pairwise_learning!`` is the function classically used in models with pairwise learning e.g. Traulsen et al, (2006).
 
-### Mutation
-
-A key element of an evolutionary model is that trait can mutate. At minimum, you must provide the mutation probability during reproduction, `mu_m`. The effect of mutation depends on the trait type:
-
-- **Discrete traits with two values (Boolean)** — the value is flipped (`true` ↔ `false`).  
-- **Discrete traits with multiple values (Integer)** — the value is replaced by another integer within the allowed range.  
-- **Continuous traits (Float)** — a new value is drawn from a truncated distribution within `:boundaries`. By default, mutations follow a Normal distribution and require `:sigma_m` as the standard deviation. If `:mutation_type = :gumbel`, you must also provide `:bias_m`.
 
 ### Running simulation
 
-To run simulations, in addition to defining traits with `z_ini` and the related mutation parameters, you need to provide any arguments used by your fitness function (e.g. `optimal`, `sigma`).
+To run simulations, in addition to defining traits with `z_ini` and the related mutation parameters, you need to provide any arguments used by your fitness function (e.g. `optimal`, `sigma`) by adding them and their values to `parameters`.
 
 Simulation parameters are built in and already have default values. Their names and purposes are listed in the complete [list of parameters](#list-of-parameters), and can also be inspected with:
 ```julia
 print_default_parameters()         # Print default values
 get_default_parameters()           # Access current defaults
 ```
-To change a simulation parameter for a given run, simply assign it a new value in `parameters`. To change the defaults more generally, use:
+To change a simulation parameter for a given run, simply assign it a new value in `parameters`. For instance, to run replicated simulations, simply set the parameter `n_simul` to the desired number of replicates. To change the defaults more generally, use:
 ```julia
 set_default_parameters!(...)       # Override defaults globally
 reset_default_parameters!()        # Reset to built-in defaults
 ```
-For instance, To run replicated simulations, simply set the parameter `:n_simul` to the desired number of replicates.
-
 
 ---
 
 ### Output
 
-`evol_model` returns a `DataFrame`. Each row corresponds to a generation (`:de = 'g'`), a patch (`:de = 'p'`), or an individual (`:de = 'i'`), depending on the value of the `:de` parameter.  
-Results are saved starting from generation `:n_print`, and then every `:j_print` generations.
+`evol_model` returns a `DataFrame`. Each row corresponds to a generation (`de = 'g'`), a patch (`de = 'p'`), or an individual (`de = 'i'`), depending on the value of the `de` parameter.  
+Results are saved starting from generation `n_print`, and then every `j_print` generations.
 
 By default, each row includes:
 - The simulation ID (also used as the random seed, ensuring reproducibility)
-- The patch ID (if `:de = 'p'` or `:de = 'i'`)  
-- The individual ID (if `:de = 'i'`)  
+- The patch ID (if `de = 'p'` or `de = 'i'`)  
+- The individual ID (if `de = 'i'`)  
 - The trait value(s)  
 - The fitness values
 
@@ -196,11 +220,15 @@ or as a named tuple:
 ```julia
 return (; fitness, extra1, extra2)
 ```
-If you use a named tuple, field names are used as column names in the output. Otherwise, you can provide names using the `:other_output_names` parameter (see [Output](#output)). If no names are provided, the extra variables are named `V1`, `V2`, and so on.
 
-Extra variables measured need to match one of the resolution: one value per individual, per patch or per generation. 
+Column names are taken, in order of priority:
+1. from `other_output_names`, if you set it;
+2. otherwise from the field names, if you returned a named tuple;
+3. otherwise `V1`, `V2`, …
 
-An example output with a single trait `z`, one extra variable `distance_to_optimal`, a population structured in two groups of size 2, two generations and individual-level resolution (`:de = 'i'`) is:
+Extra variables measured need to match one of the resolutions: one value per individual, per patch or per generation. 
+
+An example output with a single trait `z`, one extra variable `distance_to_optimal`, a population structured in two groups of size 2, two generations and individual-level resolution (`de = 'i'`) is:
 
 | gen | i_simul | patch | ind |   z   | fitness | distance_to_optimal |
 |-----|---------|-------|-----|-------|---------|---------------------|
@@ -216,14 +244,13 @@ An example output with a single trait `z`, one extra variable `distance_to_optim
 
 #### Resolution handling
 
-You can choose if you want values at the level of 
-The engine adapts variables to match the chosen resolution:  
+You can choose whether results are recorded at the level of the **generation**, **patch**, or **individual** using the `de` parameter:
 
-- If the desired resolution (`:de`) is **higher** than the variable (e.g. `:de = 'p'` and the variable is individual-level), values are **averaged** and names are changed accordingly.
-  Example:  
-  - Individual trait `z` → `mean_z = mean(population)`  
-  - Across the whole metapopulation → `global_mean_z = mean(vcat(metapopulation...))`  
-- If the desired resolution is **lower** (e.g. `:de = 'g'` but the variable is patch-level), values are **repeated** to match.  
+* `de = 'g'` — one value for the whole population at each generation.
+* `de = 'p'` — one value per patch at each generation.
+* `de = 'i'` — one value per individual at each generation.
+
+The engine automatically adapts variables to the chosen level. If a variable is defined at a finer level than the requested output, it is averaged and renamed: `mean_<var>` for individual → patch, `global_mean_<var>` for individual or patch → generation. If a variable is defined at a coarser level than the requested output, its value is repeated for the corresponding patches or individuals.
 
 Starting from the individual-level output shown above, changing the resolution to patch-level results in:
 
@@ -234,7 +261,7 @@ Starting from the individual-level output shown above, changing the resolution t
 | 2   | 42      | 1     | 0.41   | 0.149        | 0.048                    |
 | 2   | 42      | 2     | 0.40   | 0.307        | 0.039                    |
 
-And for generation-level resolution (`:de = 'g'`):
+And for generation-level resolution (`de = 'g'`):
 
 | gen | i_simul | global_mean_z | global_mean_fitness | global_mean_distance_to_optimal |
 |-----|---------|---------------|---------------------|---------------------------------|
@@ -243,15 +270,18 @@ And for generation-level resolution (`:de = 'g'`):
 
 Here, `global_mean_z` is the average of **all individuals in the population**.
 
+#### Continuing a simulation
+
+If `z_ini` is provided as a `DataFrame`, the model uses the last generation in the table as the starting population.  
+The output is another `DataFrame` that appends the new simulation to the original one, with generation numbers continuing from the last row.
+
+This makes it easy to simulate **parameter changes over time**. You can run the model once, then use the resulting `DataFrame` as input for another run with different parameters, and the generations will continue.
+
 #### Writing on disk
 
-If `:write_file = true`, results are saved to disk in a CSV file named:
+If `write_file = true`, results are saved to disk in a CSV file named `name_model-param1=value1-param2=value2-...csv`
 
-```
-name_model-param1=value1-param2=value2-...csv
-```
-
-You can use the field `:parameters_to_omit` to exclude specific parameters from the filename.
+You can use the field `parameters_to_omit` to exclude specific parameters from the filename.
 
 Formatting conventions:
 
@@ -260,12 +290,6 @@ Formatting conventions:
 - File parameters are printed using only the filename (e.g. `network.csv` => `network`)
 - Distributions are formatted as `Name_param1_param2`, e.g. `Normal_0.0_0.5`
 
-#### DataFrame as input
-
-If `z_ini` is provided as a `DataFrame`, the model uses the last generation in the table as the starting population.  
-The output is another `DataFrame` that appends the new simulation to the original one, with generation numbers continuing from the last row.
-
-This makes it easy to simulate **parameter changes over time**. You can run the model once, then use the resulting `DataFrame` as input for another run with different parameters, and the generations will continue seamlessly.
 
 ---
 
@@ -275,30 +299,26 @@ This makes it easy to simulate **parameter changes over time**. You can run the 
 
 ### Multiple Traits
 
-Multiple traits are represented internally as tuples. To include several traits, set `:z_ini` to a tuple of initial values, one per trait. For example:
+Multiple traits are represented internally as tuples. To include several traits, set `z_ini` to a tuple of initial values, one per trait. For example:
 
 ```julia
 z_ini = (true, 0.2, 2.0)
 ```
 
-#### Initial values
-
-You can use different initializers as explained in [initial trait values](#initial-trait-values]) e.g. `(Normal(0,1), [0.5, 1.0, 1.5])`. 
-If a datataframe is provided, it needs columns `:z1`, `:z2`, ...
+Each trait can use a different initializer (see [Defining traits](#defining-traits)), for example `(Normal(0, 1), [0.5, 1.0, 1.5])`.
 
 #### Mutations
 
-Mutation-related parameters (such as `:mu_m` and `:sigma_m`) can be given as a single value or as a tuple.
+Mutation-related parameters (such as `mu_m` and `sigma_m`) can be given as a single value or as a tuple.
 - If a single value is provided, it is applied to all traits.
 - If different values are provided, provide a tuple of the same length as the number of traits.
 
-You **must specify `nothing`** for traits where parameters like `:sigma_m` do not apply. Currently, there's no way to infer the trait type from the context alone. For instance:
+You **must specify `nothing`** for traits where parameters like `sigma_m` do not apply. Currently, there's no way to infer the trait type from the context alone. For instance:
 
  ```julia
 mu_m = (0.01, 0.01, 0.01)
 sigma_m = (nothing, 0.1, nothing)
 ```
-
 
 #### Access in fitness function
 
@@ -314,69 +334,72 @@ This makes it easy to extract one trait across all patches and individuals: the 
 
 ### Sexual Reproduction & multiple loci
 
-When you set `:n_loci > 0`, traits are no longer stored as simple numbers. Instead, each individual carries a genotype, represented as a matrix of alleles (rows = loci, columns = 2 alleles). The fitness function still takes as input the phenotype derived from this genotype, which is generated using the `genotype_to_phenotype_mapping` function.
+When you set `n_loci > 0`, traits are no longer stored as simple numbers. Instead, each individual carries a genotype, represented as a matrix of alleles (rows = loci, columns = 2 alleles). The fitness function still takes as input the phenotype derived from this genotype, which is generated using the `genotype_to_phenotype_mapping` function.
 
 The following defaults mapping apply:
 - For a single locus: the phenotype is the **average** of the two alleles, corresponding to a purely additive model without dominance.
-- For multiple loci: the phenotype is the **sum of allelic effects**, scaled by `:delta`. This implements an additive multilocus model with equal effect size per allele.
+- For multiple loci: the phenotype is the **sum of allelic effects**, scaled by `delta`. This implements an additive multilocus model with equal effect size per allele.
 
 You can override the defaults by providing your own ``genotype_to_phenotype_mapping`` function. Note that this function must be defined at the level of an individual genotype (a single matrix), and not at the population level (a vector of matrices).
 
-Be careful to use a reproduction function containing `sexual` in the name if you have `:n_loci > 0`.
+Be careful to use a reproduction function containing `sexual` in the name if you have `n_loci > 0`.
 
 ---
 
 ### Migration
 
 Migration between different patches is implemented in two ways:
-- **Integrated in reproduction**: use a reproduction function that already includes migration, such as `reproduction_WF_island_model_hard_selection` or `reproduction_WF_island_model_soft_selection`. In this case, you only need to provide `:mig_rate` as a parameter.
-- **Separate migration step**: specify a migration function, which is applied after reproduction.specifying a migration function which is applied **after reproduction**. This function receives the population and arguments from parameters. This is the default approach when using explicit (agent-based) reproduction functions.
 
-The reason for these two approaches is efficiency and flexibility. Modelling migration in a Wright–Fisher process is much faster than doing it separetely. In contrast, explicit agent-based models may require many different migration rules (for example, depending on a spatial network), so migration is kept as a separate step for maximum flexibility.
+- **Integrated in reproduction**: use a reproduction function that already includes migration, such as `reproduction_WF_island_model_hard_selection` or `reproduction_WF_island_model_soft_selection`. In this case, you only need to provide `mig_rate` as a parameter.
+- **Separate migration step**: specify a migration function, which is applied after reproduction. This function receives the population and arguments from parameters.
 
-You can see the full list of migration function with their requirements using:
+You can see the full list of migration functions and their requirements using:
 
 ```julia
-list_migration_methods()
+list_migration_methods()   ## To see the list and requirements
+list_migration_functions() ## To access directly the functions
 ```
-You can access directly the list of function using `list_reproduction_functions()`.
 
 ---
 ## Advanced usage
 ---
+
+
 ### Parameters Computed at Runtime
 
 You can define additional parameters that are computed **once at the start of the simulation**, rather than fixed in advance. This is useful when you want to precompute values that depend on other parameters, for example, drawing constant carrying capacities from a distribution, generating a network based on a chosen network type, or ensuring that initial trait values are always far from the current optimum, whatever that optimum is.
 
-To do this, pass a dictionnary to `evol_model` using the keyword `:additional_parameters`:
+To do this, pass a dictionary to `evol_model` through the `additional_parameters` argument:
 
 - **Keys** are the names of the new parameters (symbols),
 - **Values** are functions that compute the parameter from existing ones, potentially based on values of other `parameters`
 
-Each function **must accept only keyword arguments**, and all required arguments must be present in the `parameters` dictionary. . It should also include `kwargs...` at the end for compatibility.
+Each function **must accept only keyword arguments**, and all required arguments must be present in the `parameters` dictionary. It should also include `kwargs...` at the end for compatibility.
 
 If a derived parameter has the same name as an existing one, the old value is replaced by the new one.
 
 Example:
 
 ```julia
-function calculate_carrying_capacity(; mean, sigma, n_patch, kwargs...)
-    rand(Normal(mean, sigma), n_patch)
+function calculate_carrying_capacity(; mean_K, sigma_K, n_patch, kwargs...)
+    rand(Normal(mean_K, sigma_K), n_patch)
 end
 
-parameters[:mean] = 5
-parameters[:sigma] = 2
-parameters[:n_patch] = 10
+parameters = (
+    # ... your trait and simulation parameters
+    mean_K = 5,
+    sigma_K = 2,
+    n_patch = 10)
 
 evol_model(parameters, fitness_function, repro_function; additional_parameters = Dict(:K => calculate_carrying_capacity))
 ```
 
-#### Output
+#### Saving additional parameters
 
 By default, additional parameters are included in the output table. To prevent a parameter from being saved, you can either:
 
-- Start its name with an underscore (e.g. `:_hidden_variable`), or
-- Add its name to the `:additional_parameters_to_omit` list.
+- Start its name with an underscore (e.g. `_hidden_variable`), or
+- Add its name to the `additional_parameters_to_omit` list.
 
 Any parameter that is saved must have a resolution consistent with the simulation:
 - One value per generation,
@@ -393,28 +416,28 @@ You can explore multiple parameter values automatically by running a parameter s
 
 ```julia
 parameter_sweep = Dict(:sigma => [1.0, 2.0], :mu_m => [0.05, 0.1])
-evol_model(parameters_example, gaussian_fitness_function, reproduction_WF; sweep = parameter_sweep)
+evol_model(parameters_example, gaussian_fitness_function, reproduction_WF!; sweep = parameter_sweep)
 ```
 
 By default, all possible combinations are generated automatically (Cartesian product). For the example above, the sweep runs four simulations:
-- (`:sigma = 1.0`, `:mu_m = 0.05`)  
-- (`:sigma = 1.0`, `:mu_m = 0.1`)  
-- (`:sigma = 2.0`, `:mu_m = 0.05`)  
-- (`:sigma = 2.0`, `:mu_m = 0.1`)  
+- (`sigma = 1.0`, `mu_m = 0.05`)  
+- (`sigma = 1.0`, `mu_m = 0.1`)  
+- (`sigma = 2.0`, `mu_m = 0.05`)  
+- (`sigma = 2.0`, `mu_m = 0.1`)  
 
 If you set `sweep_grid = false`, values are combined **by position** (like `zip` in Julia). Using the same example:
-- (`:sigma = 1.0`, `:mu_m = 0.05`)  
-- (`:sigma = 2.0`, `:mu_m = 0.1`)  
+- (`sigma = 1.0`, `mu_m = 0.05`)  
+- (`sigma = 2.0`, `mu_m = 0.1`)  
 
 This is useful when parameters should vary in parallel rather than independently. 
 
-#### Output
+#### Sweep output
 
-By default, all results are returned in a single DataFrame, with each varying parameter included as a separate column. If `:split_sweep = true`:
-- With `:write_file = false`, the function returns a list of DataFrames, one per parameter set.
-- With `:write_file = true`, each parameter set is saved to a separate file.
+By default, all results are returned in a single DataFrame, with each varying parameter included as a separate column. If `split_sweep = true`:
+- With `write_file = false`, the function returns a list of DataFrames, one per parameter set.
+- With `write_file = true`, each parameter set is saved to a separate file.
 
- See [Parallelisation and output splitting](#-Parallelisation-and-output-splitting) for more details on saving and splitting.
+ See [Parallelisation and output splitting](#parallelisation-and-output-splitting) for more details on saving and splitting.
 
 ---
 
@@ -426,14 +449,14 @@ JuliassicPark.jl lets you run many simulations side by side. In practice, there 
 
 Both are controlled by a few flags. The table below summarises what happens.
 
-| `:split_sweep` | `:split_simul` | Behaviour |
+| `split_sweep` | `split_simul` | Behaviour |
 |---|---|---|
-| `false` | `false` | All simulations and parameter sets are combined into one DataFrame in memory, or one CSV if `:write_file = true`. When memory use is moderate (`de ≠ 'i'`), runs are parallelised across threads. |
+| `false` | `false` | All simulations and parameter sets are combined into one DataFrame in memory, or one CSV if `write_file = true`. When memory use is moderate (`de ≠ 'i'`), runs are parallelised across threads. |
 | `true`  | `false` | One file per parameter set. For each set, all replicates are run and written together. Parallelisation happens across parameter sets only. |
 | `true`  | `true`  | One file per replicate and per parameter set. This allows parallelisation across parameter sets and across replicates. This is the most scalable option for long sweeps. |
 | `false` | `true`  | Not allowed. All replicates would try to write to the same file. An error is raised. |
 
-This behaviour is implemented by `run_parameter_sweep_distributed(...)`, which chooses a safe plan based on `:write_file`, `:split_sweep`, and `:split_simul`. When different parameter sets are saved to the same file, the varying parameters are added as columns. When replicates are saved separately, the simulation ID is included in the filename.
+This behaviour is implemented by `run_parameter_sweep_distributed(...)`, which chooses a safe plan based on `write_file`, `split_sweep`, and `split_simul`. When different parameter sets are saved to the same file, the varying parameters are added as columns. When replicates are saved separately, the simulation ID is included in the filename.
 
 #### How work is executed
 
@@ -441,13 +464,13 @@ This behaviour is implemented by `run_parameter_sweep_distributed(...)`, which c
   This is the default when results are kept in memory or when writing a single combined file. Threads are simple to use and fast for medium-sized jobs on one machine.
 
 - Distributed workers (separate processes).  
-  If you set `:distributed = true`, parameter sets and replicates can be sent to multiple workers. This is useful for large sweeps and cluster jobs. Each worker has its own memory and must be ready to run your model.
+  If you set `distributed = true`, parameter sets and replicates can be sent to multiple workers. This is useful for large sweeps and cluster jobs. Each worker has its own memory and must be ready to run your model.
 
 In both cases the simulation core is the same: `evol_model` builds a per-run function, and `run_parameter_sweep_distributed` schedules many of these runs.
 
 #### Preparing distributed runs
 
-If you turn on `:distributed`, make sure every worker knows about your code and packages (see the [Julia manual on distributed computing]{https://docs.julialang.org/en/v1/manual/distributed-computing/}).
+If you turn on `distributed`, make sure every worker knows about your code and packages (see the [Julia manual on distributed computing](https://docs.julialang.org/en/v1/manual/distributed-computing/)).
 
 ```julia
 using Distributed
@@ -462,7 +485,7 @@ This includes any user-defined functions used by the model, including functions 
 
 ---
 
-## Performance tips
+## Tips
 
 ---
 
@@ -496,7 +519,7 @@ end
 Here the fitness function writes results into the provided `fitness` vector.  
 The simulation engine automatically recognizes such in-place functions, as long as the function name ends with `!`.
 
-!!! warning
+**Warning:**
     In-place fitness functions only work with reproduction functions that **preserve group sizes**, since the fitness array is preallocated assuming a constant number of individuals per group.
     
 #### Memory allocation
@@ -509,18 +532,19 @@ Fitness is evaluated many times per generation and across many generations, so e
 
 ### Reproduction function
 
-The code runs **much faster** when 
-    - you use reproduction function where group size is constant, since output arrays can be preallocated.
-    - You use in-place reproduction functions (those ending with `!`).  
+The code runs much faster when:
+
+- you use reproduction functions where group size is constant, since output arrays can be preallocated
+- you use in-place reproduction functions (those ending with `!`).
 
 ### Conditional computation for extras
 
-If you only save output occasionally (e.g. every 100 generations with `j_print = 100`, see [Parameters](#Parameters)), you can skip computing extra variables at every step. To avoid unnecessary computation:
+If you only save output occasionally (e.g. every 100 generations with `j_print = 100`, see [List of parameters](#list-of-parameters)), you can skip computing extra variables at every step. To avoid unnecessary computation:
 1. Include `should_it_print = true` as a keyword argument in the fitness function.
 2. Wrap the optional code in an `@extras` block.
 
 ```julia
-function my_fitness_function(ind; param1, param2, should_it_print = true)
+function my_fitness_function(ind; param1, param2, should_it_print = true, kwargs...)
     fitness = ...  # compute fitness
     @extras begin
         extra1 = ...  # only runs if should_it_print == true
@@ -531,7 +555,38 @@ end
 ```
 
 **Warning:** 
-If a variable is already defined before the block, it will be overwritten with `NaN` when skipping computation. Avoid reusing variable already defined inside `@extras`.
+If a variable is already defined before the block, it will be overwritten with `NaN` when skipping computation. Avoid reusing variables already defined before `@extras`.
+
+### Setting up a script
+
+A good way to organise an analysis is to set the defaults once, keep a small dictionary for the parameters you want to vary, and modify it as you go.
+
+```julia
+set_default_parameters!(
+    n_gen = 5000,
+    n_patch = 100,
+    de = 'g',
+    write_file = true,
+    z_ini = 0.1,
+    mu_m = 0.005,
+    sigma_m = 0.1,
+    boundaries = [0.0, 1.0])
+
+parameters = Dict(
+    :n_ini => 1000,
+    :optimal => 0.5,
+    :sigma => 0.1)
+
+res = evol_model(parameters, gaussian_fitness_function, reproduction_WF!)
+
+parameters[:n_ini] = 500     # smaller population
+res = evol_model(parameters, gaussian_fitness_function, reproduction_WF!)
+
+parameters[:sigma] = 0.3  
+res = evol_model(parameters, gaussian_fitness_function, reproduction_WF!)
+```
+
+Be careful: changes accumulate. `parameters` keeps everything you modified earlier in the session, so the third run above uses both `n_ini = 500` and `sigma = 0.3`. Rebuild the dictionary when you want a clean starting point.
 
 ---
 ## Design choices
@@ -574,14 +629,14 @@ sweep=Dict{Symbol, Vector}(), additional_parameters= Dict{Symbol, Function}(), m
 
 | Argument              | Type                         | Description                                                                 |
 |-----------------------|------------------------------|-----------------------------------------------------------------------------|
-| `parameters`          | `Dict` or `NamedTuple`       | All model settings: initial traits, population size, mutation rules, etc. See [Parameters](#Parameters). |
-| `fitness_function`    | `Function`                   | User-defined function that returns fitness (and optionally extra variables). See [Fitness Function](#Fitness-Function)        |
-| `reproduction_method` | `Function`       | Function describing how the next generation is built depending of the fitness. Built-in name (e.g. `reproduction_WF`) or custom function. See [Reproduction Function](#Reproduction-Function) |
+| `parameters`          | `Dict` or `NamedTuple`       | All model settings: initial traits, population size, mutation rules, etc. See [Running simulation](#running-simulation). |
+| `fitness_function`    | `Function`                   | User-defined function that returns fitness (and optionally extra variables). See [What happens at each generation](#what-happens-at-each-generation).        |
+| `reproduction_method` | `Function`       | Function describing how the next generation is built depending on the fitness. Built-in name (e.g. `reproduction_WF!`) or custom function. See [Reproduction](#reproduction). |
 
 #### Optional:
 | Argument              | Type                         | Description                                                                 |
 |-----------------------|------------------------------|-----------------------------------------------------------------------------|
-| `additional_parameters`          | `Dict`       | A dictionary of additional parameters to compute at runtime. See [Parameters Computed at Runtime](#Parameters-Computed-at-Runtime). |
+| `additional_parameters`          | `Dict`       | A dictionary of additional parameters to compute at runtime. See [Parameters Computed at Runtime](#parameters-computed-at-runtime). |
 | `sweep`          | `Dict`       |  A dictionary specifying which parameters to vary across runs. Triggers automatic parameter sweep. See [Parameter Sweep](#parameter-sweep). |
 | `migration_function`    | `Function`                   | Function describing if and how migration happens after reproduction. Built-in name (e.g. `random_migration`) or custom function. |
 | `genotype_to_phenotype_mapping` | `Function`       | Function describing how phenotype is calculated from genotype. Default functions are defined for sexual reproduction. |
@@ -590,31 +645,30 @@ sweep=Dict{Symbol, Vector}(), additional_parameters= Dict{Symbol, Function}(), m
 
 ## List of parameters
 
-Besides parameters you need for your custom fitness function, these are the parameters already in place that you can use to control the simulations
+These are the parameters already in place that you can use to control the simulations.
 
 ```
-:n_gen                     => Number of generations
-:n_ini                     => Initial number of individuals per patch
-:n_patch                   => Number of patches (groups)
-:n_loci                    => Number of loci (for diploid traits)
-:mu_m                      => Mutation rate per trait
-:sigma_m                   => Mutation effect (standard deviation)
+n_gen                     => Number of generations
+n_ini                     => Initial number of individuals per patch
+n_patch                   => Number of patches (groups)
+n_loci                    => Number of loci (for diploid traits)
+mu_m                      => Mutation rate per trait
 
-:str_selection             => Strength of selection (scale fitness)
-:n_print                   => First generation to record output
-:j_print                   => Interval between outputs
-:de                        => Data resolution: 'g', 'p', or 'i'
-:other_output_names        => Custom names for extra variables returned by the fitness function; overrides field names if a NamedTuple is used
-:write_file                => Whether to write results to disk
-:name_model                => Prefix for output filename
-:parameters_to_omit        => Parameters excluded from filename
-:additional_parameters_to_omit => Additional derived parameters to exclude from output
-:n_simul                   => Number of independent simulations
-:split_simul               => Whether to save each simulation replicate to a separate file. Requires :split_sweep = true. Also controls whether simulation replicates can be parallelised independently.
-:sweep_grid                => Whether to use a full Cartesian product (`true`, default) or zip mode (`false`)
-:split_sweep               => Whether to save each parameter set to a separate file. Also controls whether parameter sets can be parallelised independently.
-:distributed               => Whether to run simulations on distributed workets. (requires @everywhere for functions and imports)
-:simplify                  => Flatten population if there is a single patch
+str_selection             => Strength of selection (scale fitness)
+n_print                   => First generation to record output
+j_print                   => Interval between outputs
+de                        => Data resolution: 'g', 'p', or 'i'
+other_output_names        => Custom names for extra variables returned by the fitness function; overrides field names if a NamedTuple is used
+write_file                => Whether to write results to disk
+name_model                => Prefix for output filename
+parameters_to_omit        => Parameters excluded from filename
+additional_parameters_to_omit => Additional derived parameters to exclude from output
+n_simul                   => Number of independent simulations
+split_simul               => Whether to save each simulation replicate to a separate file. Requires split_sweep = true. Also controls whether simulation replicates can be parallelised independently.
+sweep_grid                => Whether to use a full Cartesian product (`true`, default) or zip mode (`false`)
+split_sweep               => Whether to save each parameter set to a separate file. Also controls whether parameter sets can be parallelised independently.
+distributed               => Whether to run simulations on distributed workers. (requires @everywhere for functions and imports)
+simplify                  => Flatten population if there is a single patch
 ```
 
 
@@ -625,7 +679,7 @@ Besides parameters you need for your custom fitness function, these are the para
 
 - `src/` — core simulation logic split into mutation, reproduction, migration, simulation engine
 - `test/` — unit tests
-- `basic_examples/` — demo models
+- `examples/basic_example.jl` — demo models
 
 ## License
 
