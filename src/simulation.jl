@@ -71,6 +71,7 @@ function evol_model(parameters_input, fitness_function, repro_function; sweep=Di
     ## Parameter that will never be printed.
     append!(parameters[:parameters_to_omit],PARAMETERS_TO_ALWAYS_OMIT)
     parameters[:parameters_to_omit]= Symbol.(parameters[:parameters_to_omit])
+    parameters[:z_ini] isa AbstractDataFrame && push!(parameters[:parameters_to_omit], :z_ini)
 
     ## Generate the model to output (as shown in replicator, it takes parameters and its ID which is i_simul as input)
     model = get_template_model(parameters, fitness_function, repro_function; additional_parameters= additional_parameters, migration_function = migration_function, genotype_to_phenotype_mapping = genotype_to_phenotype_mapping)
@@ -121,7 +122,6 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         n_traits = 1
         if parameters[:z_ini] isa AbstractDataFrame
             n_traits = length(filter(c -> startswith(string(c), "z"), names(parameters[:z_ini])))
-            push!(parameters[:parameters_to_omit], :z_ini)
         ## Standardise z_ini
         else
             if !isa(parameters[:z_ini], Tuple)

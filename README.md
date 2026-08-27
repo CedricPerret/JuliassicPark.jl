@@ -138,8 +138,10 @@ A key element of an evolutionary model is that traits can mutate. At minimum, yo
 
 - **Discrete traits with two values (Boolean)** — the value is flipped (`true` ↔ `false`).  
 - **Discrete traits with multiple values (Integer)** — the value is replaced by another integer within the allowed range.  
-- **Continuous traits (Float)** — a new value is drawn from a truncated distribution within `boundaries`. By default, mutations follow a Normal distribution and require the key `sigma_m` as the standard deviation. If you set `mutation_type = :gumbel`, you must also provide the key `bias_m` and its value.
-
+- **Continuous traits (Float)** — a new value is drawn according to `mutation_type` within `boundaries`. Available options are:
+  - `:normal` (default) — truncated Normal distribution centred on the current trait value.
+  - `:normal_clamped` — Normal mutation with values outside `boundaries` clamped to the nearest boundary.
+  - `:gumbel` — truncated Gumbel distribution; use `bias_m` to introduce directional bias.
 
 ### What happens at each generation
 
@@ -202,8 +204,7 @@ reset_default_parameters!()        # Reset to built-in defaults
 
 ### Output
 
-`evol_model` returns a `DataFrame`. Each row corresponds to a generation (`de = 'g'`), a patch (`de = 'p'`), or an individual (`de = 'i'`), depending on the value of the `de` parameter.  
-Results are saved starting from generation `n_print`, and then every `j_print` generations.
+`evol_model` returns a `DataFrame`. Each row corresponds to a generation (`de = 'g'`), a patch (`de = 'p'`), or an individual (`de = 'i'`), depending on the value of the `de` parameter. Results are saved starting from generation `n_print`, and then every `j_print` generations.
 
 By default, each row includes:
 - The simulation ID (also used as the random seed, ensuring reproducibility)
@@ -220,13 +221,7 @@ or as a named tuple:
 ```julia
 return (; fitness, extra1, extra2)
 ```
-
-Column names are taken, in order of priority:
-1. from `other_output_names`, if you set it;
-2. otherwise from the field names, if you returned a named tuple;
-3. otherwise `V1`, `V2`, …
-
-Extra variables measured need to match one of the resolutions: one value per individual, per patch or per generation. 
+Extra variables need to match one of the resolutions: one value per individual, per patch or per generation. To avoid unnecessary computation, see [compute extras only when needed](#compute-extras-only-when-needed).
 
 An example output with a single trait `z`, one extra variable `distance_to_optimal`, a population structured in two groups of size 2, two generations and individual-level resolution (`de = 'i'`) is:
 
@@ -241,6 +236,10 @@ An example output with a single trait `z`, one extra variable `distance_to_optim
 | 2   | 42      | 2     | 3   | 0.23  | 0.0007  | 0.0729              |
 | 2   | 42      | 2     | 4   | 0.57  | 0.6130  | 0.0049              |
 
+Column names are taken, in order of priority:
+1. from `other_output_names`, if you set it;
+2. otherwise from the field names, if you returned a named tuple;
+3. otherwise get assigned automatically `V1`, `V2`, …
 
 #### Resolution handling
 
@@ -489,75 +488,9 @@ This includes any user-defined functions used by the model, including functions 
 
 ---
 
+### Workflow
 
-### Fitness functions
-
-#### Choosing the function level
-
-When possible, it is usually faster to define the function at the **metapopulation level**, because the simulation can run without extra broadcasting or reshaping.
-
-#### In-place fitness functions
-
-Memory use is lower (and runtime is often faster) when a function writes results into an existing array instead of creating a new one.
-In JuliassicPark.jl you can provide an in-place fitness function at the population or metapopulation level. Such a function:  
-- Takes the current population as the first argument.  
-- Takes the fitness array as the second argument.  
-- Assigns values directly into `fitness`.  
-
-Example:
-
-```julia
-function gaussian_fitness_function!(z::Vector{Float64}, fitness; optimal, sigma, kwargs...)
-    for i in 1:length(z)
-        fitness[i] = exp(-(z[i] - optimal)^2 / sigma^2)
-    end
-    distance_to_optimal = (z .- optimal).^2
-    return distance_to_optimal
-end
-```
-
-Here the fitness function writes results into the provided `fitness` vector.  
-The simulation engine automatically recognizes such in-place functions, as long as the function name ends with `!`.
-
-**Warning:**
-    In-place fitness functions only work with reproduction functions that **preserve group sizes**, since the fitness array is preallocated assuming a constant number of individuals per group.
-    
-#### Memory allocation
-
-Fitness is evaluated many times per generation and across many generations, so even small allocations add up. To keep simulations fast:
-- Prefer explicit loops with in-place updates over patterns that create temporary arrays
-- Use the @. macro to broadcast all operations in an expression at once. This reduces accidental temporaries compared with sprinkling many dots.
-- Reuse preallocated buffers when possible, rather than creating new arrays inside hot loops.
-- When slicing arrays, consider @views to avoid copying data.
-
-### Reproduction function
-
-The code runs much faster when:
-
-- you use reproduction functions where group size is constant, since output arrays can be preallocated
-- you use in-place reproduction functions (those ending with `!`).
-
-### Conditional computation for extras
-
-If you only save output occasionally (e.g. every 100 generations with `j_print = 100`, see [List of parameters](#list-of-parameters)), you can skip computing extra variables at every step. To avoid unnecessary computation:
-1. Include `should_it_print = true` as a keyword argument in the fitness function.
-2. Wrap the optional code in an `@extras` block.
-
-```julia
-function my_fitness_function(ind; param1, param2, should_it_print = true, kwargs...)
-    fitness = ...  # compute fitness
-    @extras begin
-        extra1 = ...  # only runs if should_it_print == true
-        extra2 = ...
-    end
-    return fitness, extra1, extra2
-end
-```
-
-**Warning:** 
-If a variable is already defined before the block, it will be overwritten with `NaN` when skipping computation. Avoid reusing variables already defined before `@extras`.
-
-### Setting up a script
+#### Setting up a script
 
 A good way to organise an analysis is to set the defaults once, keep a small dictionary for the parameters you want to vary, and modify it as you go.
 
@@ -587,6 +520,102 @@ res = evol_model(parameters, gaussian_fitness_function, reproduction_WF!)
 ```
 
 Be careful: changes accumulate. `parameters` keeps everything you modified earlier in the session, so the third run above uses both `n_ini = 500` and `sigma = 0.3`. Rebuild the dictionary when you want a clean starting point.
+
+#### Loading the data in R
+
+If you prefer to analyse your results in R, a small helper script is provided in `scripts/R/import_data.R`. It provides a function to **load and combine all matching `.csv` files in the current working directory into a single `data.table` (or `data.frame`)**. The helper requires the R package `data.table`.
+
+```r
+f_import_data(name_file, listVar = c(), parse_value = TRUE, as_data_frame = FALSE)
+```
+
+* `name_file` specifies the parts that filenames must contain. Several strings can be provided to successively filter the files.
+* `listVar` specifies which parameters in the filenames should be extracted and added as columns.
+* `parse_value = TRUE` automatically converts parameter values to numbers or logical values when possible.
+*  `as_data_frame = FALSE` controls the output format: `FALSE` (default) returns a `data.table`, while `TRUE` returns a standard `data.frame`.
+
+For example, suppose you ran a parameter sweep with a population size of `1000`, varied `sigma`, and used `split_sweep`, so that each parameter combination was saved in a separate file. You can load and combine all corresponding files with:
+
+```r
+data <- f_import_data("n_ini=1000", "sigma")
+```
+
+This returns a single `data.table` containing all matching files, with an additional `sigma` column containing the value extracted from each filename.
+
+Several filters and parameters can also be specified:
+
+```r
+data <- f_import_data(c("n_ini=1000", "mu_m=0.01"), c("sigma", "n_patch"))
+```
+
+Parameters whose values are vectors are automatically expanded into separate columns. For example, a filename containing `optimal=[-2.0,2.0]` will produce the columns `optimal1` and `optimal2`.
+
+Because `-` is used to separate parameters in JuliassicPark filenames, use `_` rather than `-` within multi-word parameter names or string values.
+
+### Performance
+
+#### Compute extras only when needed
+
+If you only save output occasionally (e.g. every 100 generations with `j_print = 100`, see [List of parameters](#list-of-parameters)), you can skip computing extra variables at every step. To avoid unnecessary computation:
+1. Include `should_it_print = true` as a keyword argument in the fitness function.
+2. Wrap the optional code in an `@extras` block.
+
+```julia
+function my_fitness_function(ind; param1, param2, should_it_print = true, kwargs...)
+    fitness = ...  # compute fitness
+    @extras begin
+        extra1 = ...  # only runs if should_it_print == true
+        extra2 = ...
+    end
+    return fitness, extra1, extra2
+end
+```
+
+**Warning:** 
+If a variable is already defined before the block, it will be overwritten with `NaN` when skipping computation. Avoid reusing variables already defined before `@extras`.
+
+
+#### In-place fitness functions
+
+JuliassicPark.jl also directly supports **in-place fitness functions** to reduce memory allocation. Instead of returning a newly allocated fitness array, these functions write fitness values into a preallocated array. In-place functions can be defined at either the population or metapopulation level.
+An in-place fitness function:
+- Takes the current population as the first argument.  
+- Takes the fitness array as the second argument.  
+- Assigns values directly into `fitness`.  
+Example:
+
+```julia
+function gaussian_fitness_function!(z::Vector{Float64}, fitness; optimal, sigma, kwargs...)
+    for i in 1:length(z)
+        fitness[i] = exp(-(z[i] - optimal)^2 / sigma^2)
+    end
+    distance_to_optimal = (z .- optimal).^2
+    return distance_to_optimal
+end
+```
+
+Here the fitness function writes results into the provided `fitness` vector.   The simulation engine automatically recognizes such in-place functions, as long as the function name ends with `!`.
+
+**Warning:**
+    In-place fitness functions only work with reproduction functions that **preserve group sizes**, since the fitness array is preallocated assuming a constant number of individuals per group.
+
+#### Reproduction function
+
+The code runs much faster when:
+
+- you use reproduction functions where group size is constant, since output arrays can be preallocated
+- you use in-place reproduction functions (those ending with `!`).
+
+
+#### Memory allocation
+
+Reducing memory allocation is often one of the most effective ways to speed up a simulation. Fitness is evaluated many times per generation and across many generations, so even small allocations can add up substantially.
+
+To reduce allocations:
+- Prefer explicit loops with in-place updates over patterns that create temporary arrays.
+- Use the `@.` macro to broadcast all operations in an expression at once. This helps avoid accidental temporary arrays from repeated broadcasting.
+- Reuse preallocated buffers when possible rather than creating new arrays inside frequently called functions.
+- When slicing arrays, consider `@views` to avoid unnecessary copies.
 
 ---
 ## Design choices
