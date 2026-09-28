@@ -1,6 +1,6 @@
 # JuliassicPark.jl 
 ![CI](https://github.com/CedricPerret/JuliassicPark/actions/workflows/CI.yml/badge.svg)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21647951.svg)](https://doi.org/10.5281/zenodo.21647951)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21647950.svg)](https://doi.org/10.5281/zenodo.21647950)
 
 **JuliassicPark.jl** is a lightweight and flexible Julia package for simulating evolutionary models with customizable fitness functions.
 
