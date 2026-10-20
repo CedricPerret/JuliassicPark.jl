@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.2.4] - 2026-10-20
+- Change the sort parameters when building filename so it works without dependencies (dictionnary cannot be sort with the base julia)
+
 ## [0.1.3] - 2026-12-03
 - Update simulations so that only the first element of output is updated when should_it_print = false. It avoids compatibility problem with the default values of extra, e.g. NaN instead of [NaN].
 

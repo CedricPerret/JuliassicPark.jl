@@ -56,7 +56,7 @@ function _build_filename(wd::String, parameters::Dict, parameters_to_omit::Vecto
         end
     end
     #--- Generate name of the file with -key=value for each parameter (sorted for reproducibility), with abbreviated values
-    name_file = join(["-" * string(k) * "=" * _abbreviate(v) for (k, v) in sort(parameters_copy)], "")
+    name_file = join(["-" * string(k) * "=" * _abbreviate(v) for (k, v) in sort(collect(parameters_copy); by=first)], "")
 end
 
 #--- Public function: returns full file path
