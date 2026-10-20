@@ -98,7 +98,7 @@ end
 
 parameters_example = Dict(
     :z_ini => 0.1,
-    :n_gen => 100,
+    :n_gen => 10,
     :n_ini => 1000,
     :n_patch => 2,
     :str_selection => 1.0,
@@ -109,7 +109,7 @@ parameters_example = Dict(
     :de => 'g',
     :optimal => 0.6,
     :sigma => 1.0,
-    :j_print => 100
+    :j_print => 1
 )
 #res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
 @testset "smoke tests – single trait" begin
@@ -142,7 +142,7 @@ end
 
 parameters_example_two = Dict(
     :z_ini => (0.1,0.1),
-    :n_gen => 100,
+    :n_gen => 10,
     :n_ini => 1000,
     :n_patch => 2,
     :str_selection => 1.0,
@@ -153,7 +153,7 @@ parameters_example_two = Dict(
     :de => 'g',
     :optimal => 0.6,
     :sigma => 1.0,
-    :j_print => 100
+    :j_print => 1
 )
 
 ## Debugging
@@ -175,7 +175,7 @@ end
 parameters_example_three = Dict(
     :z_ini => (0.1, true, 5),
     :n_gen => 3,
-    :n_ini => 5,
+    :n_ini => 50,
     :n_patch => 1,
     :n_loci => 0,
     :str_selection => 1.0,
