@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.5]
+- mutation rate put to 0 when sd is 0 too. Avoid bug with truncated distribution of 0 variance.
+- _abbreviate for filename now work for vector of non-number
+
 ## [0.2.4] - 2026-10-20
 - Change the sort parameters when building filename so it works without dependencies (dictionnary cannot be sort with the base julia)
 

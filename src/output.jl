@@ -27,7 +27,7 @@ function _abbreviate(x)
             return(string(round(x,digits=5)))
         end
     elseif x isa Vector
-        return string(round.(x,digits=5))
+        return string([v isa Real ? round(v, digits=5) : v for v in x])
     elseif x isa String
         if any(occursin.([".csv",".txt"],x))
             #findlast return nothing. We use something to change it to 0

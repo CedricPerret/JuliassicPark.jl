@@ -136,6 +136,14 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         #--- Normalise the trait relevant parameters (depending of number of traits, need to unwrap or copy) + reorganise them in the right format
         mut_kwargs_names = [:sigma_m, :boundaries, :mutation_type,:bias_m] 
         _normalise_trait_parameters!(parameters,[:mu_m; mut_kwargs_names], n_traits)
+        # If sigma_m is zero, set the corresponding mutation probability to zero.
+        if haskey(parameters, :sigma_m) && parameters[:sigma_m] !== nothing
+            if n_traits == 1
+                iszero(parameters[:sigma_m]) && (parameters[:mu_m] = 0.0)
+            else
+                parameters[:mu_m] = ifelse.(iszero.(parameters[:sigma_m]), 0.0, parameters[:mu_m])
+            end
+        end
         ## Move from sigma_m = [sigma_m1,sigma_m2], bias_m = [bias_m1,bias_m2] to param_trait1 = [sigma_m = sigma_m1, bias_m=bias_m1]
         ## which can be given as a whole to mutation
         mut_kwargs = _prepare_kwargs_multiple_traits(parameters, mut_kwargs_names, n_traits)
