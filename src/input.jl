@@ -3,7 +3,7 @@
 #-----------------------------------------------
 
 """
-    initialise_population(z_ini, n_ini, n_patch; boundaries = nothing, simplify = true, n_loci = 0)
+    initialise_population(z_ini, patch_size, n_patch; boundaries = nothing, flatten_single_patch = true, n_loci = 0)
 
 Initialise a population.
 
@@ -13,16 +13,16 @@ Arguments
     - AbstractVector (sampled; if length == 1 it is treated as a single individual to copy)
     - Distributions.Distribution (sampled; truncated if boundaries are given)
     - Tuple of per-trait sources, one entry per trait
-    - AbstractDataFrame or any Tables.jl table with columns :gen, :patch, and :z or :z1, :z2, ...
-      In this case the last generation is used. The table is authoritative and n_ini, boundaries, and n_loci are ignored.
-- n_ini::Int: Number of individuals per patch when sampling or copying.
+    - DataFrame 
+      In this case the last generation is used. The table is authoritative and patch_size, boundaries, and n_loci are ignored.
+- patch_size::Int: Number of individuals per patch when sampling or copying.
 - n_patch::Int: Number of patches.
 - boundaries: Per-trait bounds. For one trait pass [min, max] or (min, max). For multiple traits pass one [min, max] per trait.
-- simplify::Bool: If true and n_patch == 1, return a single vector of individuals. Faster for downstream functions, but outputs have less uniform dimensions.
+- flatten_single_patch::Bool: If true and n_patch == 1, return a single vector of individuals. Faster for downstream functions, but outputs have less uniform dimensions.
 - n_loci::Int: Number of loci for diploids. If > 0, each individual stores an n_loci × 2 genotype per trait.
 
 Returns
-- population: A vector of patches, each a vector of individuals. If simplify == true and n_patch == 1, returns a single vector.
+- population: A vector of patches, each a vector of individuals. If flatten_single_patch == true and n_patch == 1, returns a single vector.
   Individuals are Float64 for one trait, or tuples for multiple traits. With n_loci > 0, entries are genotype arrays.
 
 Examples
@@ -40,7 +40,7 @@ initialise_population([1.0, 2.0, 3.0], 5, 2)
 initialise_population((Normal(0, 1), [0.5, 1.0, 1.5]), 5, 2; boundaries = [(-2.0, 2.0), (0.0, 2.0)])
 
 # Diploid with two loci
-initialise_population(Normal(0, 1), 5, 2; boundaries = [-1.0, 1.0], n_loci = 0)
+initialise_population(Normal(0, 1), 5, 2; boundaries = [-1.0, 1.0], n_loci = 2)
 
 #Generator per patch
 initialise_population([Normal(1.,0.1),Normal(0.2,0.001)], 5, 2; boundaries = [0.0, 2.0])
@@ -48,27 +48,28 @@ initialise_population([Normal(1.,0.1),Normal(0.2,0.001)], 5, 2; boundaries = [0.
 initialise_population([[1.0],[0.5]], 5, 2; boundaries = [0.0, 2.0])
 
 """
-function initialise_population(z_ini::AbstractDataFrame, n_ini::Int, n_patch::Int; boundaries=nothing, simplify=true, n_loci=0)
+function initialise_population(z_ini::DataFrame, patch_size::Int, n_patch::Int; boundaries=nothing, flatten_single_patch=true, n_loci=0)
     # This is better than guessing from the vector dimensions as if n_cst = false, we can't infer when the input needs to be sampled or taken as it is.
     population = get_pop_at_last_gen(z_ini)
-    if simplify && n_patch == 1 && length(population) == 1
+    if flatten_single_patch && n_patch == 1 && length(population) == 1
         population = population[1]
     end
     return population
 end
 
 
-function initialise_population(z_ini, n_ini, n_patch::Int; boundaries=nothing, simplify = true, n_loci = 0)
+function initialise_population(z_ini, patch_size, n_patch::Int; boundaries=nothing, flatten_single_patch = true, n_loci = 0)
     n_trait = z_ini isa Tuple ? length(z_ini) : 1
     #--- We wrap the boundaries the time of the initialisation (cannot wrap the parameter before because with a single trait, population simplifies to scalar rather than tuple)
     ## We want to get one generator per patch per trait.
     z_ini_complete = z_ini isa Tuple ? collect(Any, z_ini) : Any[z_ini]
-    #--- If only one boundary set is given, we either replicate or wrap it.
+    #--- If only one boundary set is given, we either replicate or wrap it. 
+    ## Already handled by _normalise_trait_parameters but useful to have it here for direct calls
     ## - If boundaries are missing, fill with `nothing`.
     ## - If a single pair of limits is given, replicate it for all traits.
     if boundaries === nothing
         boundaries = fill(nothing, n_trait)
-    elseif !isa(boundaries[1], Vector) && !isa(boundaries[1], Tuple)
+    elseif boundaries[1] isa Real
         boundaries = [boundaries for _ in 1:n_trait]
     end
 
@@ -92,10 +93,10 @@ function initialise_population(z_ini, n_ini, n_patch::Int; boundaries=nothing, s
         end
     end
 
-    #--- Create populations: for each trait and patch, generate n_ini individuals.
+    #--- Create populations: for each trait and patch, generate patch_size individuals.
     populations = [[
         [_generate_trait(z_ini_complete[i_trait][i_patch];
-            boundaries=boundaries[i_trait], n_loci=n_loci_temp, ploidy=ploidy) for i_ind in 1:n_ini] for i_patch in 1:n_patch]
+            boundaries=boundaries[i_trait], n_loci=n_loci_temp, ploidy=ploidy) for i_ind in 1:patch_size] for i_patch in 1:n_patch]
         for i_trait in 1:n_trait]
     
     #--- Restructure the population obtained
@@ -107,7 +108,7 @@ function initialise_population(z_ini, n_ini, n_patch::Int; boundaries=nothing, s
     end
 
     ## Simplify if single patch.It makes it faster for other function. 
-    (simplify && n_patch == 1) && (population = only(population))
+    (flatten_single_patch && n_patch == 1) && (population = only(population))
 
     return population
 end
@@ -128,39 +129,6 @@ function _generate_trait(z_ini::AbstractVector; boundaries, n_loci, ploidy)
 end
 
 
-
-# function get_pop_at_gen(res::DataFrame; gen=:last, patch_col::Symbol=:patch, trait_cols=:auto)
-#     # 1) Pick the generation of interest
-#     selected_gen = gen === :last ? maximum(res.gen) : gen
-#     # 2) Keep only rows for that generation and sort by patch for deterministic output order
-#     df_gen = sort(res[res.gen .== selected_gen, :], patch_col)
-#     # 3) Determine which columns are traits
-#     if trait_cols === :auto
-#         trait_cols = filter(c -> startswith(string(c), "z"), names(df_gen))
-#     end
-#     # Sort traits by numeric suffix so z1,z2,...,z10 are in the right order
-#     trait_cols = sort(trait_cols, by = c -> begin
-#         m = match(r"\d+$", string(c))
-#         m === nothing ? 1 : parse(Int, m.match)
-#     end)
-#     # 4) Group rows by patch
-#     grouped_by_patch = groupby(df_gen, patch_col)
-#     # 5) Build population: per patch, collect individuals
-#     if length(trait_cols) == 1
-#         # Single trait: individuals are scalars
-#         zcol = trait_cols[1]
-#         return [collect(group_df[!, zcol]) for group_df in grouped_by_patch]
-#     else
-#         # Multiple traits: individuals are tuples (z1,z2,...)
-#         n_traits = length(trait_cols)
-#         return [begin
-#                     # Pull columns once for cache friendliness
-#                     cols = [group_df[!, trait_cols[t]] for t in 1:n_traits]
-#                     [ntuple(t -> cols[t][row_i], n_traits) for row_i in 1:nrow(group_df)]
-#                 end for group_df in grouped_by_patch]
-#     end
-# end
-
 function get_pop_at_gen(res::DataFrame; gen=:last, patch_col::Symbol=:patch, trait_cols=:auto)
     # 1) Pick the generation of interest
     selected_gen = gen === :last ? maximum(res.gen) : gen
@@ -168,7 +136,7 @@ function get_pop_at_gen(res::DataFrame; gen=:last, patch_col::Symbol=:patch, tra
     df_gen = sort(res[res.gen .== selected_gen, :], patch_col)
     # 3) Determine which columns are traits
     if trait_cols === :auto
-        trait_cols = filter(c -> startswith(string(c), "z"), names(df_gen))
+        trait_cols = filter(c -> occursin(r"^z\d*$", c), names(df_gen))
     end
     # Sort traits by numeric suffix so z1,z2,...,z10 are in the right order
     trait_cols = sort(trait_cols, by = c -> begin
@@ -229,7 +197,7 @@ Fitness function output can be an element, or a tuple. This function uses `colle
 # Arguments
 - `population::Vector` or `population::Vector{Vector}`: The population trait.
 - `fitness_function::Function`: The fitness function to preprocess.
-- `parameters`: Additional parameters to pass to the fitness function.
+- `parameters`: Parameters to pass to the fitness function.
 
 # Returns
 - `Function`: A preprocessed fitness function that handles various input cases and returns a consistent output format.
@@ -315,7 +283,7 @@ end
 """
     extract_output_names(population, fitness_function, parameters, correction)
 
-Extracts the names of additional outputs from a fitness function if it returns a `NamedTuple`. Only works if the function returns a `NamedTuple`; otherwise returns an empty vector.
+Extracts the names of extra outputs from a fitness function if it returns a `NamedTuple`. Only works if the function returns a `NamedTuple`; otherwise returns an empty vector.
 """
 function extract_output_names(population, fitness_function, parameters,correction)
     sample_input = correction == 2 ? population[1][1] :
@@ -479,11 +447,11 @@ end
 function get_simulation_seed(parameters::Dict, i_simul::Int)
     if haskey(parameters, :seed)
         #-> We use the seed provided by the user
-        if parameters[:n_simul] == 1
+        if parameters[:n_rep] == 1
             return parameters[:seed]
         else
-            @assert isa(parameters[:seed], AbstractVector) "If n_simul > 1, parameter :seed must be a vector of seeds"
-            @assert length(parameters[:seed]) == parameters[:n_simul] "Expected one seed per simulation"
+            @assert isa(parameters[:seed], AbstractVector) "If n_rep > 1, parameter :seed must be a vector of seeds"
+            @assert length(parameters[:seed]) == parameters[:n_rep] "Expected one seed per simulation"
             return parameters[:seed][i_simul]
         end
     else
@@ -510,8 +478,8 @@ Generates a list of parameter dictionaries by sweeping over combinations of valu
 
 # Notes
 - In `parameters`, the key `:sweep_grid` controls the combination strategy:
-  - `:grid` (default) generates the full Cartesian product of all values.
-  - `:zip` aligns values by position (like `zip()` in Julia).
+  - `true` (default) generates the full Cartesian product of all values.
+  - `false` aligns values by position (like `zip()` in Julia).
 # Returns
 A vector of `Dict{Symbol,Any}`, one per valid parameter combination.
 """
@@ -576,6 +544,7 @@ Useful for selectively passing keyword arguments to functions.
 function _filter_kwargs(kwargs::Dict, accepted::Vector{Symbol})
     return (; (k => kwargs[k] for k in accepted if haskey(kwargs, k))...)
 end
+
 """
     _prepare_kwargs_multiple_traits(parameters::Dict{Symbol,Any},
                                     kwarg_names::Vector{Symbol},
@@ -639,8 +608,8 @@ Special case: a single `[min, max]` (or `(min, max)`) for `:boundaries` is repli
 function _normalise_trait_parameters!(parameters,kwargs_names, n_traits)
     for kwarg_i in kwargs_names
         haskey(parameters, kwarg_i) || continue
-        parameters[kwarg_i] === nothing && continue
         if n_traits == 1
+            parameters[kwarg_i] === nothing && continue
             if parameters[kwarg_i] isa AbstractVector
                 if length(parameters[kwarg_i]) == 1
                     #-> To guard against boundaries being a vector
@@ -649,8 +618,8 @@ function _normalise_trait_parameters!(parameters,kwargs_names, n_traits)
             end
         elseif n_traits > 1
             if kwarg_i == :boundaries
-                #-> A single vector of boundary has been provided
-                if !isa(parameters[kwarg_i][1],Vector) && !isa(parameters[kwarg_i][1],Tuple)
+                #-> A single vector of boundary has been provided (or nothing)
+                if parameters[kwarg_i] === nothing || parameters[kwarg_i][1] isa Real
                     parameters[kwarg_i]= fill(parameters[kwarg_i], n_traits)
                 end
             elseif !(parameters[kwarg_i] isa AbstractVector) && !(parameters[kwarg_i] isa Tuple)
@@ -676,25 +645,23 @@ function _base_default_parameters()
     Dict(
         :n_gen => 1000,
         :n_patch => 1,
-        :n_ini => 100,
+        :patch_size => 1000,
         :n_loci => 0,
         :mu_m => 0.0001,
         :str_selection => 1.0,
-        :n_print => 1,
-        :j_print => 1,
-        :de => 'i',
-        :other_output_names => String[],
+        :log_from => 1,
+        :log_every => 1,
+        :log_by => 'i',
+        :extras_names => String[],
         :write_file => false,
         :name_model => "model_",
         :parameters_to_omit => String[],
-        :additional_parameters_to_omit => Symbol[],
-        :split_simul => false,
+        :split_rep => false,
         :sweep_grid => true,
         :split_sweep => false,
         :distributed => false,
-        :n_simul => 1,
-        :simplify => true,
-        :boundaries => nothing
+        :n_rep => 1,
+        :flatten_single_patch => true
     )
 end
 
@@ -706,6 +673,7 @@ end
 function print_parameters(parameters;io::IO=stdout)
     parameters = parameters isa NamedTuple ? Dict{Any,Any}(pairs(parameters)) : parameters
     parameters = merge(get_default_parameters(), parameters)
+
     printed = Set{Symbol}()
 
     println(io, "Parameters\n" * "="^35)
@@ -739,17 +707,17 @@ end
 
 
 const PARAMETER_CATEGORIES = [
-    "Demographic settings"    => [:n_gen, :n_ini, :n_patch, :n_loci],
+    "Demographic settings"    => [:n_gen, :patch_size, :n_patch, :n_loci],
     "Mutation settings"       => [:mu_m, :sigma_m, :bias_m, :boundaries, :mutation_type],
     "Reproduction settings"   => [:str_selection],
-    "Output options"          => [:n_print, :j_print, :de, :other_output_names],
-    "File writing"            => [:write_file, :name_model, :parameters_to_omit, :additional_parameters_to_omit],
-    "Simulation control"      => [:n_simul, :split_simul, :sweep_grid, :split_sweep, :distributed, :simplify],
+    "Output options"          => [:log_from , :log_every, :log_by, :extras_names],
+    "File writing"            => [:write_file, :name_model, :parameters_to_omit],
+    "Simulation control"      => [:n_rep, :split_rep, :sweep_grid, :split_sweep, :distributed, :flatten_single_patch, :seed],
 ]
 
 const PARAMETER_DESCRIPTIONS = Dict(
     :n_gen        => "Number of generations",
-    :n_ini        => "Initial individuals per patch",
+    :patch_size        => "Initial patch size",
     :n_patch      => "Number of patches (groups)",
     :n_loci       => "Number of loci (for diploid traits)",
     :mu_m         => "Mutation rate per trait",
@@ -758,34 +726,34 @@ const PARAMETER_DESCRIPTIONS = Dict(
     :boundaries   => "Trait bounds (min, max)",
     :mutation_type => "Mutation kernel type (optional)",
     :str_selection => "Strength of selection",
-    :n_print      => "First generation to record output",
-    :j_print      => "Interval between outputs",
-    :de           => "Data resolution: 'g', 'p', or 'i'",
-    :other_output_names => "Names for additional variables",
+    :log_from      => "First generation to record output",
+    :log_every      => "Interval between outputs",
+    :log_by           => "Data resolution: 'g', 'p', or 'i'",
+    :extras_names => "Names for extra variables",
     :write_file   => "Whether to write results to disk",
     :name_model   => "Prefix for output filename",
     :parameters_to_omit => "Parameters excluded from filename",
-    :additional_parameters_to_omit => "Additional derived parameters to exclude from output",
-    :n_simul      => "Number of independent simulations",
-    :split_simul  => "Whether to save each simulation replicate to a separate file. Requires :split_sweep = true. Also controls whether simulation replicates can be parallelised independently.",
+    :n_rep      => "Number of independent simulations",
+    :split_rep  => "Whether to save each simulation replicate to a separate file. Requires :split_sweep = true. Also controls whether simulation replicates can be parallelised independently.",
     :sweep_grid => "Whether to use a full Cartesian product (`true`, default) or zip mode (`false`)",
     :split_sweep  => "Whether to save each parameter set to a separate file. Also controls whether parameter sets can be parallelised independently.",
-    :distributed => "Whether to run simulations on distributed workets. (requires @everywhere for functions and imports)",
-    :simplify     => "Flatten population if there is a single patch"
+    :distributed => "Whether to run simulations on distributed workers. (requires @everywhere for functions and imports)",
+    :flatten_single_patch     => "Flatten population if there is a single patch",
+    :seed => "Random seed (one integer per simulation if n_rep > 1; randomly generated if omitted)"
 )
 
-const PARAMETERS_TO_ALWAYS_OMIT = ["other_output_names",
+const PARAMETERS_TO_ALWAYS_OMIT = ["extras_names",
 "boundaries",
 "n_cst",
 "distributed",
 "parameters_to_omit",
 "name_model",
-"additional_parameters_to_omit",
 "write_file",
-"split_simul",
+"split_rep",
 "sweep_grid",
 "split_sweep",
-"simplify"]
+"flatten_single_patch",
+"seed"]
 
 
 # --- Public setter: globally override some defaults
@@ -801,11 +769,11 @@ function reset_default_parameters!()
 end
 
 #-----------------------------------------------
-#*** Additional parameters computed at the start of the simulation
+#*** Parameters derived at the start of the simulation
 #-----------------------------------------------
 
 """
-    compute_derived_parameters!(parameters, additional_parameters; additional_parameters_to_omit)
+    compute_derived_parameters!(parameters, derived_parameter_generators)
 
 Compute and insert derived parameters into the `parameters` dictionary in-place.  
 Each derived parameter is defined by a user-supplied function that takes keyword arguments from `parameters`.
@@ -814,8 +782,7 @@ Typically used to generate constant values at the start of a simulation, such as
 
 # Arguments
 - `parameters::Dict{Symbol, Any}`: Dictionary of model parameters. Modified in-place.
-- `additional_parameters::Dict{Symbol, Function}`: Maps the name of each derived parameter to a function that returns its value. Functions must accept only keyword arguments, and those must be present in `parameters`.
-- `additional_parameters_to_omit`: List of parameter names (as `Symbol` or `String`) to exclude from output saving.
+- `derived_parameter_generators::Dict{Symbol, Function}`: Maps the name of each derived parameter to a function that returns its value. Functions must accept only keyword arguments, and those must be present in `parameters`.
 
 # Returns
 A tuple of:
@@ -827,15 +794,13 @@ A tuple of:
 - Each derived value must match the resolution of model output:
   - Single value (generation-level),
   - Vector of length `n_patch` (patch-level),
-  - Vector of vectors with shape `(n_patch, n_ini)` (individual-level).
+  - Vector of vectors with shape `(n_patch, patch_size)` (individual-level).
 - If resolution is individual-level, `parameters[:n_cst]` must be `true`.
 
 """
-function compute_derived_parameters!(parameters, additional_parameters; additional_parameters_to_omit)
-    ## So that user can provide a vector of string or symbol
-    additional_parameters_to_omit = Symbol.(additional_parameters_to_omit)
+function compute_derived_parameters!(parameters, derived_parameter_generators)
     cst_output_names=[]; cst_output_values=[];
-    for (key, value) in additional_parameters
+    for (key, value) in derived_parameter_generators
         if haskey(parameters, key)
             @warn "Derived parameter `:$key` already exists in the parameters dictionary. It will be replaced by the newly computed value."
         end
@@ -845,22 +810,25 @@ function compute_derived_parameters!(parameters, additional_parameters; addition
         #--- Saving new parameters
         ##The new parameters are too long to print in the name of the output file but...
         ##they can be printed in the data output if specified by the users
-        if first(string(key)) != '_' && key ∉ additional_parameters_to_omit
+        if first(string(key)) != '_' && key ∉ parameters[:parameters_to_omit]
             # Validity checks
-            @assert length(value_parameters) == 1 || length(value_parameters) == parameters[:n_patch] "The output of derived parameter `:$key` must have resolution compatible with the model: " * 
-                "either one value per generation, per patch (length = n_patch), or per individual " *
-                "(length = n_patch, with sub-vectors of length n_ini)."
-            if isa(value_parameters[1], Vector)
-                @assert length(value_parameters[1]) == parameters[:n_ini] "The output of derived parameter `:$key` must have resolution compatible with the model: " *
+            if value_parameters isa AbstractArray
+                @assert length(value_parameters) == 1 || length(value_parameters) == parameters[:n_patch] "The output of derived parameter `:$key` must have resolution compatible with the model: " * 
                     "either one value per generation, per patch (length = n_patch), or per individual " *
-                    "(length = n_patch, with sub-vectors of length n_ini)."
-                @assert parameters[:n_cst] == true "Derived parameter `:$key` is at individual-level resolution, " *
-                    "but population size is not constant (`n_cst = false`)."
+                    "(length = n_patch, with sub-vectors of length patch_size)."
+                if isa(value_parameters[1], Vector)
+                    @assert length(value_parameters[1]) == parameters[:patch_size] "The output of derived parameter `:$key` must have resolution compatible with the model: " *
+                        "either one value per generation, per patch (length = n_patch), or per individual " *
+                        "(length = n_patch, with sub-vectors of length patch_size)."
+                    @assert parameters[:n_cst] == true "Derived parameter `:$key` is at individual-level resolution, " *
+                        "but population size is not constant (`n_cst = false`)."
+                end
             end
             push!(cst_output_names, string(key))
             push!(cst_output_values, value_parameters)
         end
     end
-    append!(parameters[:parameters_to_omit], Symbol.(keys(additional_parameters)))
+    #@ No need because the filename is already written at this stage
+    #append!(parameters[:parameters_to_omit], Symbol.(keys(additional_parameters)))
     return parameters,cst_output_names,cst_output_values
 end

@@ -1,15 +1,24 @@
 #***********************************************
 #*** User-facing functions (simulation control)
 #***********************************************
+# Parameter handling
+# - User parameters override defaults; sweep values override both.
+# - Ordinary parameters are included in filenames unless listed in
+#   :parameters_to_omit (which also includes built-in exclusions).
+# - Derived(f) is evaluated at the start of each replicate. The function
+#   is never included in filenames, but its computed value is saved as
+#   a DataFrame column unless its name starts with "_" or is listed
+#   in :parameters_to_omit.
+# - Omitting a parameter from output never removes it from the simulation.
 
 using Distributed
 
 """
     evol_model(parameters_input, fitness_function, repro_function; 
                sweep = Dict{Symbol, Vector}(), 
-               additional_parameters = Dict(), 
                migration_function = nothing, 
-               genotype_to_phenotype_mapping = identity)
+               genotype_to_phenotype_mapping = identity,
+               parameter_constraints = nothing)
 
 Main entry point to run an evolutionary simulation or parameter sweep with user-defined components.
  
@@ -24,31 +33,33 @@ Main entry point to run an evolutionary simulation or parameter sweep with user-
 
 # Keyword Arguments
 - `sweep::Dict{Symbol, <:AbstractVector}`: Optional parameter sweep. Each key is a parameter symbol; values are tested in combination.
-- `additional_parameters::Dict`: Optional dictionary of derived or fixed parameters to be merged in and saved to output.
 - `migration_function::Union{Function, Nothing}`: Optional function defining migration across patches or groups.
 - `genotype_to_phenotype_mapping::Function`: Optional mapping function, mainly for sexual reproduction. Defaults to `identity`.
+- `parameter_constraints`: Optional function that takes the parameters as input and checks their validity using assertions before running simulations.
 
 # Returns
-- `DataFrame` or `Vector{DataFrame}`: Simulation result(s) containing traits, fitness values, and optional extra outputs, depending on `:write_file`, `:split_simul`, and `:split_sweep` settings.
+- `DataFrame` or `Vector{DataFrame}`: Simulation result(s) containing traits, fitness values, and optional extra outputs, depending on `:write_file`, `:split_rep`, and `:split_sweep` settings.
     - If `:write_file = true`, results are written to `.csv` files instead of returned.
-    - If `:n_simul == 0`, the simulation function is returned without execution.
 
 # Notes
 - Supports both single runs and full parameter sweeps via `sweep`.
 - The behaviour of saving vs. returning data is controlled by:
     - `:write_file` — write to disk or return
-    - `:split_simul` — one file per simulation
+    - `:split_rep` — one file per simulation
     - `:split_sweep` — one file per parameter set
 - Parallelisation:
-    - If `:split_sweep` and `:split_simul` are both `true`, each sweep × simulation is parallelised and saved independently.
-    - If no writing is requested and `:n_simul` is large, threads are used to speed up simulation replicates.
+    - If `:split_sweep` and `:split_rep` are both `true`, each sweep × simulation is parallelised and saved independently.
+    - If no writing is requested and `:n_rep` is large, threads are used to speed up simulation replicates.
 - Trait types (Boolean, Integer, Float) are inferred from `:z_ini` and related fields (`:boundaries`, `:sigma_m`, etc.).
-- Additional statistics returned by `fitness_function` are automatically logged, with names controlled by `:other_output_names`.
+- Additional statistics returned by `fitness_function` are automatically logged, with names controlled by `:extras_names`.
+
+
 """
 
 ## Wrapper (prepare parameters and put default, then call each part)
 ## here prepare only thing that will not be varied in a sweep.
-function evol_model(parameters_input, fitness_function, repro_function; sweep=Dict{Symbol, Vector}(), additional_parameters= Dict{Symbol, Function}(), migration_function = nothing, genotype_to_phenotype_mapping = identity)
+function evol_model(parameters_input, fitness_function, repro_function; 
+    sweep=Dict{Symbol, Vector}(), migration_function = nothing, genotype_to_phenotype_mapping = identity, parameter_constraints = nothing)
     
     ## To not modify the parameters given
     if isempty(parameters_input)
@@ -57,9 +68,30 @@ function evol_model(parameters_input, fitness_function, repro_function; sweep=Di
         parameters = deepcopy(parameters_input)
     end
     parameters = parameters isa NamedTuple ? Dict{Any,Any}(pairs(parameters)) : parameters
-    parameters = merge(get_default_parameters(), parameters)
+    default_parameters = get_default_parameters()
 
+    ## To deal with change of built-in names 
+    sweep = copy(sweep)
+    for (old, new) in (
+        :j_print => :log_every,
+        :n_print => :log_from,
+        :de => :log_by,
+        :simplify => :flatten_single_patch,
+        :n_simul => :n_rep,
+        :split_simul => :split_rep,
+        :delta => :allele_eff,
+        :n_ini => :patch_size,
+        :other_output_names => :extras_names
+    )
+        rename_deprecated!(parameters, old, new)
+        rename_deprecated!(default_parameters, old, new)
+        rename_deprecated!(sweep, old, new)
+    end
+
+    parameters = merge(default_parameters, parameters)
     @assert haskey(parameters, :z_ini) "Missing required parameter: `:z_ini`. Please provide the initial values or generators for the trait(s)."
+    any(v -> any(x -> x isa Derived, v), values(sweep)) && error("Sweeping over Derived values is not supported. Sweep over a normal parameter that the Derived function reads instead.")
+
 
     ## We infer if the group sizes will change based on the reproduction function.
     if  contains(give_me_my_name(repro_function), "explicit") 
@@ -67,24 +99,35 @@ function evol_model(parameters_input, fitness_function, repro_function; sweep=Di
         parameters[:n_cst] = false
     else
         parameters[:n_cst] = true
+        if migration_function in (random_migration, random_migration!)
+            error("random_migration changes patch sizes, so it only works with non-constant group size. ")
+        end
     end
-    ## Parameter that will never be printed.
-    append!(parameters[:parameters_to_omit],PARAMETERS_TO_ALWAYS_OMIT)
-    parameters[:parameters_to_omit]= Symbol.(parameters[:parameters_to_omit])
-    parameters[:z_ini] isa AbstractDataFrame && push!(parameters[:parameters_to_omit], :z_ini)
+
+
+    ## Parameter that will never be printed. + convert all to symbols
+    parameters[:parameters_to_omit] = Symbol.(parameters[:parameters_to_omit])
+    append!(parameters[:parameters_to_omit], Symbol.(PARAMETERS_TO_ALWAYS_OMIT))
+    if haskey(parameters, :additional_parameters_to_omit)
+        append!(parameters[:parameters_to_omit],Symbol.(parameters[:additional_parameters_to_omit]))
+        @warn "`additional_parameters_to_omit` is deprecated and will be removed in a future version. " *
+          "Add these names to `parameters_to_omit` instead." maxlog = 1
+        delete!(parameters, :additional_parameters_to_omit)
+    end
+    parameters[:z_ini] isa DataFrame && push!(parameters[:parameters_to_omit], :z_ini)
 
     ## Generate the model to output (as shown in replicator, it takes parameters and its ID which is i_simul as input)
-    model = get_template_model(parameters, fitness_function, repro_function; additional_parameters= additional_parameters, migration_function = migration_function, genotype_to_phenotype_mapping = genotype_to_phenotype_mapping)
+    model = get_template_model(parameters, fitness_function, repro_function; migration_function = migration_function, genotype_to_phenotype_mapping = genotype_to_phenotype_mapping)
     
     #--- Run
     ## If no sweep, it gives back a vector containing as single element the parameters
-    run_parameter_sweep_distributed(model, sweep, parameters)
+    run_parameter_sweep_distributed(model, sweep, parameters, parameter_constraints)
 
 end
 
 
 """
-    get_template_model(parameters_input, fitness_function, repro_function; additional_parameters=Dict(), migration_function=nothing, genotype_to_phenotype_mapping=identity)
+    get_template_model(parameters_input, fitness_function, repro_function; migration_function=nothing, genotype_to_phenotype_mapping=identity)
 
 Returns a function that runs a single evolutionary simulation with a fixed set of parameters.
 
@@ -94,7 +137,6 @@ This wrapper assembles all components—initialisation, fitness evaluation, muta
 - `parameters_input::Dict`: Dictionary of input parameters (copied internally).
 - `fitness_function::Function`: User-supplied function computing fitness from phenotypes.
 - `repro_function::Function`: Function specifying how reproduction is performed (in-place or return-based).
-- `additional_parameters::Dict`: Derived parameters to be computed at initialisation.
 - `migration_function::Function`: Optional migration step applied after reproduction.
 - `genotype_to_phenotype_mapping`: Function mapping genotypes to phenotypes (default: `identity`).
 
@@ -107,21 +149,42 @@ A function `model(parameters, i_simul)` that:
 # Notes
 - If `genotype_to_phenotype_mapping` is not provided and `repro_function` is sexual, default mappings are used:
   - For single-locus: mean genotype (average).
-  - For multilocus: additive mapping with allelic effect `:delta` (must be provided).
+  - For multilocus: additive mapping with allelic effect `:allele_eff` (must be provided).
 - Only relevant keyword arguments are passed to mutation, reproduction, and migration to ensure flexibility and modularity.
 """
 
-function get_template_model(parameters_input, fitness_function, repro_function; additional_parameters= Dict{Symbol, Function}(), migration_function = nothing, genotype_to_phenotype_mapping = identity)
+function get_template_model(parameters_input, fitness_function, repro_function; migration_function = nothing, genotype_to_phenotype_mapping = identity)
     model = function(parameters_input, i_simul)
         #*** Initialisation
         Random.seed!(i_simul)
         parameters = deepcopy(parameters_input)
+
+        if parameters[:z_ini] isa DataFrame
+            # The first condition is to deal with handmade table.
+            @assert !hasproperty(parameters[:z_ini], :i_simul) || length(unique(parameters[:z_ini].i_simul)) == 1 "z_ini must contain a single simulation. Filter the table to one i_simul first."
+            last_gen = get_pop_at_last_gen(parameters[:z_ini])
+            parameters[:n_patch] = length(last_gen)
+            parameters[:patch_size] = length(last_gen[1])
+        end
+
+        # #--- User can provide pop_size or patch_size. we always use patch_size at the end
+        #@ Not implemented. Complicated with the default values.
+        # if !isnothing(parameters[:pop_size])
+            
+        #     parameters[:pop_size] % parameters[:n_patch] == 0 || throw(ArgumentError("pop_size ($(parameters[:pop_size])) must be divisible by n_patch ($(parameters[:n_patch]))"))
+        #     parameters[:patch_size] = parameters[:pop_size] ÷ parameters[:n_patch]
+        # end
+
         #--- Initialise second parameters which need to be derived from the given parameters (which can be directly printed)
-        parameters,cst_output_name,cst_output = compute_derived_parameters!(parameters,additional_parameters;additional_parameters_to_omit=parameters[:additional_parameters_to_omit])
+        derived_parameter_generators = Dict(k => v.f for (k, v) in parameters if v isa Derived)
+        for k in keys(derived_parameter_generators)
+            delete!(parameters, k)
+        end
+        parameters,cst_output_name,cst_output = compute_derived_parameters!(parameters,derived_parameter_generators)
 
         n_traits = 1
-        if parameters[:z_ini] isa AbstractDataFrame
-            n_traits = length(filter(c -> startswith(string(c), "z"), names(parameters[:z_ini])))
+        if parameters[:z_ini] isa DataFrame
+            n_traits = length(filter(c -> occursin(r"^z\d*$", c), names(parameters[:z_ini])))
         ## Standardise z_ini
         else
             if !isa(parameters[:z_ini], Tuple)
@@ -131,7 +194,7 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
             n_traits = length(parameters[:z_ini])
         end
         ## If it continues previous simulations, the first generation is already contained in the previous dataframe, so we do "skip it"
-        (parameters[:z_ini] isa AbstractDataFrame && parameters[:n_print] == 1) && (parameters[:n_print] += 1)
+        (parameters[:z_ini] isa DataFrame && parameters[:log_from] == 1) && (parameters[:log_from] += 1)
 
         #--- Normalise the trait relevant parameters (depending of number of traits, need to unwrap or copy) + reorganise them in the right format
         mut_kwargs_names = [:sigma_m, :boundaries, :mutation_type,:bias_m] 
@@ -139,9 +202,9 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         # If sigma_m is zero, set the corresponding mutation probability to zero.
         if haskey(parameters, :sigma_m) && parameters[:sigma_m] !== nothing
             if n_traits == 1
-                iszero(parameters[:sigma_m]) && (parameters[:mu_m] = 0.0)
+                parameters[:sigma_m] == 0. && (parameters[:mu_m] = 0.0)
             else
-                parameters[:mu_m] = ifelse.(iszero.(parameters[:sigma_m]), 0.0, parameters[:mu_m])
+                parameters[:mu_m] = [s == 0.0 ? 0.0 : m for (m, s) in zip(parameters[:mu_m], parameters[:sigma_m])]
             end
         end
         ## Move from sigma_m = [sigma_m1,sigma_m2], bias_m = [bias_m1,bias_m2] to param_trait1 = [sigma_m = sigma_m1, bias_m=bias_m1]
@@ -149,20 +212,22 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         mut_kwargs = _prepare_kwargs_multiple_traits(parameters, mut_kwargs_names, n_traits)
 
         #--- Initialise the population 
-        population = initialise_population(parameters[:z_ini], parameters[:n_ini], parameters[:n_patch]; boundaries = parameters[:boundaries], simplify = parameters[:simplify],n_loci = parameters[:n_loci])
+        population = initialise_population(parameters[:z_ini], parameters[:patch_size], parameters[:n_patch];  boundaries = get(parameters, :boundaries, nothing), flatten_single_patch = parameters[:flatten_single_patch],n_loci = parameters[:n_loci])
+        
 
         #--- This is in case the user gives a single generator, not encapsulated in a vector because the expected input is a vector of generators for each trait. 
         if contains(give_me_my_name(repro_function), "sexual") && genotype_to_phenotype_mapping == identity
-            @assert all(T <: Float64 for T in _type_of_traits(parameters[:z_ini])) "Sexual reproduction with diploids is only implemented for continuous traits (Float64)"
             if parameters[:n_loci] == 1
                 println("With sexual reproduction, the genotype to phenotype mapping needs to be provided. In the case single locus, we assume average mapping with no dominance")
+                @assert all(T <: Float64 for T in _type_of_traits(parameters[:z_ini])) "Sexual reproduction with diploids is only implemented for continuous traits (Float64)"
                 genotype_to_phenotype_mapping = average_mapping
             else
                 println("With sexual reproduction, the genotype to phenotype mapping needs to be provided. In the case multilocus, we assume additive effects with two possible discrete alleles")
-                if !haskey(parameters, :delta)
+                @assert all(T <: Bool for T in _type_of_traits(parameters[:z_ini])) "With several loci, the default mapping needs Boolean alleles (z_ini = true/false)."
+                if !haskey(parameters, :allele_eff)
                     error("Please provide the value of a single allelic effect")
                 end
-                genotype_to_phenotype_mapping = x -> additive_mapping(x,parameters[:delta])
+                genotype_to_phenotype_mapping = x -> additive_mapping(x,parameters[:allele_eff])
             end
         end
         calculate_phenotype = genotype_to_phenotype_mapping === identity ? identity : (pop -> lift_map(genotype_to_phenotype_mapping, pop))
@@ -205,18 +270,18 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         @assert all(x -> x isa AbstractFloat, fit) "Fitness values must be floating-point"
         
         ## If fitness function returns a named tuple and no other output name specified, we get the names of the extras output.
-        other_output_names = !isempty(parameters[:other_output_names]) ? parameters[:other_output_names] : extract_output_names(population_phenotype, fitness_function, parameters,correction)
+        extras_names = !isempty(parameters[:extras_names]) ? parameters[:extras_names] : extract_output_names(population_phenotype, fitness_function, parameters,correction)
         ## Truncate if too many names were provided
-        if length(other_output_names) > length(output)-2
-            extras_ignored = join(other_output_names[(length(output) - 1):end], ", ", " and ")
-            resize!(other_output_names,length(output)-2)
+        if length(extras_names) > length(output)-2
+            extras_ignored = join(extras_names[(length(output) - 1):end], ", ", " and ")
+            resize!(extras_names,length(output)-2)
             println("Too many extra output names were provided; the extras $extras_ignored are ignored")
         end
         
         df_res, saver = init_data_output(
-            parameters[:de], [["z", "fitness"]; other_output_names],
-            output, parameters[:n_gen], parameters[:n_print], parameters[:j_print],
-            i_simul, parameters[:n_patch], parameters[:n_ini], parameters[:n_cst];
+            parameters[:log_by], [["z", "fitness"]; extras_names],
+            output, parameters[:n_gen], parameters[:log_from], parameters[:log_every],
+            i_simul, parameters[:n_patch], parameters[:patch_size], parameters[:n_cst];
             output_cst_names=cst_output_name, output_cst=cst_output, n_traits
         )
 
@@ -236,8 +301,8 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
             if !in_place_fitness_function
                 #@ To avoid reallocating memory
                 #@ Note that it means that the output keep the old extras when not calculating them but it is fine since we print/use extras only when calculating them.
-                res = instanced_fitness_function(population_phenotype; parameters..., should_it_print=should_it_print(i_gen, parameters[:n_print], parameters[:j_print]))
-                if should_it_print(i_gen, parameters[:n_print], parameters[:j_print])
+                res = instanced_fitness_function(population_phenotype; parameters..., should_it_print=should_it_print(i_gen, parameters[:log_from], parameters[:log_every]))
+                if should_it_print(i_gen, parameters[:log_from], parameters[:log_every])
                     #-> Update all the output
                     output[2:(1+length(res))] = res
                 else
@@ -246,9 +311,12 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
                 end
             else
             #-> In-place fitness function
-                res = instanced_fitness_function(population_phenotype, output[2]; parameters..., should_it_print=should_it_print(i_gen, parameters[:n_print], parameters[:j_print]))
+                res = instanced_fitness_function(population_phenotype, output[2]; parameters..., should_it_print=should_it_print(i_gen, parameters[:log_from], parameters[:log_every]))
                 #@ Note that it means that the output keep the old extras when not calculating them but it is fine since we print/use extras only when calculating them.
-                output[3:end] = res
+                if should_it_print(i_gen, parameters[:log_from], parameters[:log_every])
+                    #-> Update all the output
+                    output[3:end] = res
+                end
             end
             #--- Save
             saver(df_res, i_gen, output)
@@ -269,24 +337,26 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
                 error("Population collapsed")
             end
             #--- Migrate
-            if migration_function !== nothing
+            if migration_function !== nothing && parameters[:n_patch] > 1
                 if contains(give_me_my_name(migration_function), "!")
                     #-> In-place
-                    migration_function(population, new_population; mig_kwargs...)
-                    population, new_population = new_population, population 
+                    if migration_function(population, new_population; mig_kwargs...) !== false
+                        population, new_population = new_population, population 
+                    end
                 else
                     #-> Allocating
                     population = migration_function(population; mig_kwargs...)
                 end
             end
         end
-        if parameters[:z_ini] isa AbstractDataFrame
+        if parameters[:z_ini] isa DataFrame
             df_first = parameters[:z_ini]
-            df_res.gen .+= maximum(df_first.gen)
+            df_res.gen .+= maximum(df_first.gen) - 1
             ## We duplicated the last/first generation so we remove it here.
             append!(df_first, df_res; promote=true, cols=:union)        
             ## Homogeneise the id_simul    
-            df_first.i_simul .= df_first.i_simul[1]
+            df_first.i_simul .= i_simul
+            
             df_res = df_first
         end
         return df_res
@@ -296,21 +366,22 @@ end
 
 
 """
-    run_parameter_sweep_distributed(fun, sweep, parameters)
+    run_parameter_sweep_distributed(fun, sweep, parameters, parameter_constraints)
 
 Runs a distributed parameter sweep over multiple parameter combinations and simulation replicates.
 
-Handles different parallelisation strategies based on user-specified flags such as `:write_file`, `:split_sweep`, and `:split_simul`.
+Handles different parallelisation strategies based on user-specified flags such as `:write_file`, `:split_sweep`, and `:split_rep`.
 
 # Arguments
 - `fun`: A function of the form `(parameters, seed) -> DataFrame`, returning results from a single simulation.
 - `sweep::Dict{Symbol, Vector}`: Dictionary of parameter values to sweep over.
-- `parameters::Dict`: Base parameters for all simulations. Must include fields like `:n_simul`, `:write_file`, and `:name_model`.
+- `parameters::Dict`: Base parameters for all simulations. Must include fields like `:n_rep`, `:write_file`, and `:name_model`.
+- `parameter_constraints`: Optional function that takes the parameters as input and checks their validity using assertions before running simulations.
 
 # Parallelisation Modes
 - If `:write_file=false`: all results are accumulated and returned as a `DataFrame` or list of `DataFrame`s.
 - If `:write_file=true` and `:split_sweep=true`: results for each parameter combination are saved to separate files.
-- If `:split_simul=true`: each replicate is saved individually, with simulation ID in the filename.
+- If `:split_rep=true`: each replicate is saved individually, with simulation ID in the filename.
 - Uses multi-threading when possible (unless resolution is individual-level or memory usage is high).
 
 # Returns
@@ -318,32 +389,33 @@ Handles different parallelisation strategies based on user-specified flags such 
 - If `:write_file=true`: writes results to disk and returns `nothing`.
 
 # Errors
-- Throws an error if `:split_simul=true` but `:split_sweep=false`, as this may lead to file name conflicts.
+- Throws an error if `:split_rep=true` but `:split_sweep=false`, as this may lead to file name conflicts.
 
 # Notes
 - Output filenames are generated using `build_filepath(...)`, optionally summarising swept parameter values.
 - Uses progress bars and thread-local buffers for efficient aggregation under multi-threading.
 """
-function run_parameter_sweep_distributed(fun, sweep, parameters)
+function run_parameter_sweep_distributed(fun, sweep, parameters, parameter_constraints)
     list_parameters_set, sweep_df = get_parameters_from_sweep(parameters, sweep)
+    parameter_constraints !== nothing && foreach(parameter_constraints, list_parameters_set)
     ##function to calculate a random seed
     n = length(list_parameters_set)
-    total = n*parameters[:n_simul]
+    total = n*parameters[:n_rep]
     p = Progress(total, 1)
     update!(p, 0)  # <-- Forces the bar to show immediately
-    if parameters[:split_simul] && !parameters[:split_sweep] && !isempty(sweep)
-        error("split_simul=true requires split_sweep=true to avoid file conflicts or ambiguity.")
+    if parameters[:split_rep] && !parameters[:split_sweep] && !isempty(sweep)
+        error("split_rep=true requires split_sweep=true to avoid file conflicts or ambiguity.")
     end
 
-    if !parameters[:write_file] || (parameters[:write_file] && !parameters[:split_simul] && !parameters[:split_sweep])
+    if !parameters[:write_file] || (parameters[:write_file] && !parameters[:split_rep] && !parameters[:split_sweep])
         # -> No parallel write, accumulate everything
         #--- Generate data
         list_res = Vector{DataFrame}(undef, n)
-        if Threads.nthreads() == 1 || parameters[:n_simul] < 10 || parameters[:de] =='i'
+        if Threads.nthreads() == 1 || parameters[:n_rep] < 10 || parameters[:log_by] =='i'
             #-> Small enough or take too much memory to paralelise over threads.
             for i in 1:n
                 res = DataFrame()
-                for i_simul in 1:parameters[:n_simul]
+                for i_simul in 1:parameters[:n_rep]
                     id_simul =  get_simulation_seed(parameters, i_simul)
                     sim_res = fun(list_parameters_set[i],id_simul)
                     append!(res, sim_res)
@@ -358,7 +430,7 @@ function run_parameter_sweep_distributed(fun, sweep, parameters)
         else
             #-> Use threads to parallelise over simulations
             for i in 1:n
-                simulation_results = Vector{DataFrame}(undef, parameters[:n_simul])
+                simulation_results = Vector{DataFrame}(undef, parameters[:n_rep])
 
                 Threads.@threads for i_simul in eachindex(simulation_results)
                     id_simul = get_simulation_seed(parameters, i_simul)
@@ -389,9 +461,9 @@ function run_parameter_sweep_distributed(fun, sweep, parameters)
     end
 
     if parameters[:write_file]
-        if (parameters[:split_sweep] && parameters[:split_simul]) || (parameters[:split_simul] && isempty(sweep))
+        if (parameters[:split_sweep] && parameters[:split_rep]) || (parameters[:split_rep] && isempty(sweep))
             # -> Parallelise both: each sweep point, each replicate, independently saved
-            jobs = collect(Iterators.product(1:n, 1:parameters[:n_simul]))
+            jobs = collect(Iterators.product(1:n, 1:parameters[:n_rep]))
             if parameters[:distributed]
                 @sync @distributed for k in eachindex(jobs)
                         i, i_simul = jobs[k]
@@ -413,7 +485,7 @@ function run_parameter_sweep_distributed(fun, sweep, parameters)
             if parameters[:distributed]
                 @sync @distributed for i in 1:n
                     filepath = _build_filepath(parameters[:name_model],list_parameters_set[i],parameters[:parameters_to_omit],".csv")
-                    for i_simul in 1:parameters[:n_simul]
+                    for i_simul in 1:parameters[:n_rep]
                         id_simul = get_simulation_seed(parameters, i_simul)
                         res = fun(list_parameters_set[i], id_simul)
                         CSV.write(filepath, res;
@@ -424,7 +496,7 @@ function run_parameter_sweep_distributed(fun, sweep, parameters)
             else
                 Threads.@threads for i in 1:n
                     filepath = _build_filepath(parameters[:name_model],list_parameters_set[i],parameters[:parameters_to_omit],".csv")
-                    for i_simul in 1:parameters[:n_simul]
+                    for i_simul in 1:parameters[:n_rep]
                         id_simul = get_simulation_seed(parameters, i_simul)
                         res = fun(list_parameters_set[i], id_simul)
                         CSV.write(filepath, res;
@@ -443,7 +515,6 @@ function run_parameter_sweep_distributed(fun, sweep, parameters)
     end
 end
 
-
 function parallel_if(distributed::Bool, range, body)
     if distributed
         @sync @distributed for k in range
@@ -454,4 +525,17 @@ function parallel_if(distributed::Bool, range, body)
             body(k)
         end
     end
+end
+
+function rename_deprecated!(parameters, old::Symbol, new::Symbol)
+    if haskey(parameters, old)
+        @warn "$old is deprecated. Use $new instead." maxlog=1
+        haskey(parameters, new) && error("Cannot use both $old and $new (be sure to check parameters and default parameters)")
+        parameters[new] = pop!(parameters, old)
+    end
+end
+
+## To identify the parameters to generate at runtime.
+struct Derived{F<:Function}
+    f::F
 end

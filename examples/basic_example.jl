@@ -51,16 +51,16 @@ end
 parameters_example = Dict(
     :z_ini => Normal(0.1, 0.1),
     :n_gen => 1500,
-    :n_ini => 10000,
+    :patch_size => 10000,
     :n_patch => 1,
     :str_selection => 1.0,
     :mu_m => 0.005,
     :sigma_m => 0.1,
     :boundaries => [0.0, 1.0],
-    :other_output_names => ["distance_to_optimal"],
+    :extras_names => ["distance_to_optimal"],
     :write_file => false,
-    :parameters_to_omit => ["n_loci", "j_print"],
-    :de => 'g',
+    :parameters_to_omit => ["n_loci", "log_every"],
+    :log_by => 'g',
     :optimal => 0.6,
     :sigma => 1.0
 )
@@ -82,12 +82,12 @@ function gaussian_fitness_function(z::Number; optimal, sigma, args...)
     return (;fitness, distance_to_optimal)
 end
 
-parameters_example[:other_output_names] = []
+parameters_example[:extras_names] = []
 res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
 
 #-----------------------------------------------------------
-#*** 2.1 Conditional Output with `should_it_print`
-#    Only compute secondary output when necessary (e.g. for performance)
+#*** 2.1 Conditional output with @extras
+#    Only compute extra output when necessary for performance
 #-----------------------------------------------------------
 
 function gaussian_fitness_function(z::Number; optimal, sigma, should_it_print = true, kwargs...)
@@ -100,11 +100,11 @@ function gaussian_fitness_function(z::Number; optimal, sigma, should_it_print = 
 end
 
 parameters_example[:n_gen] = 200 
-parameters_example[:n_ini] = 5 
-parameters_example[:j_print] = 1
+parameters_example[:patch_size] = 5 
+parameters_example[:log_every] = 1
 @time evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
 
-parameters_example[:j_print] = 100
+parameters_example[:log_every] = 100
 @time evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
 
 #-----------------------------------------------------------
@@ -113,7 +113,7 @@ parameters_example[:j_print] = 100
 
 #--- (a) No output file
 parameters_example[:write_file] = false
-parameters_example[:split_simul] = false
+parameters_example[:split_rep] = false
 parameters_example[:split_sweep] = false
 res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
 
@@ -122,14 +122,14 @@ parameters_example[:write_file] = true
 res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
 
 #--- (c) Write to single file + Thread-parallelised simulations
-parameters_example[:split_simul] = false
+parameters_example[:split_rep] = false
 parameters_example[:split_sweep] = false
-parameters_example[:n_simul] = 15
+parameters_example[:n_rep] = 15
 res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
 
 #--- (d) Split by simulation
-parameters_example[:split_simul] = true
-parameters_example[:n_simul] = 2
+parameters_example[:split_rep] = true
+parameters_example[:n_rep] = 2
 res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
 
 #-----------------------------------------------------------
@@ -137,23 +137,23 @@ res = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF)
 #-----------------------------------------------------------
 
 parameter_sweep = Dict(:sigma => [1.0, 2.0], :mu_m => [0.05, 0.1])
-parameters_example[:n_simul] = 2
-parameters_example[:j_print] = 1999
-parameters_example[:de] = 'g'
+parameters_example[:n_rep] = 2
+parameters_example[:log_every] = 1999
+parameters_example[:log_by] = 'g'
 
 #--- (a) All results in one file
 parameters_example[:split_sweep] = false
-parameters_example[:split_simul] = false
+parameters_example[:split_rep] = false
 evol_model(parameters_example, gaussian_fitness_function, reproduction_WF; sweep = parameter_sweep)
 
 #--- (b) One file per parameter set
 parameters_example[:split_sweep] = true
-parameters_example[:split_simul] = false
+parameters_example[:split_rep] = false
 evol_model(parameters_example, gaussian_fitness_function, reproduction_WF; sweep = parameter_sweep)
 
-#--- (c) One file per replicate
+#--- (c) One file per replicate and per parameter set
 parameters_example[:split_sweep] = true
-parameters_example[:split_simul] = true
+parameters_example[:split_rep] = true
 evol_model(parameters_example, gaussian_fitness_function, reproduction_WF; sweep = parameter_sweep)
 
 
@@ -174,7 +174,7 @@ function threshold_public_good_game(z::Vector{Bool};a,c,threshold,kwargs...)
 end
 
 parameters_example = (z_ini = [true,false], mu_m = 0.001,
-n_gen = 100, n_ini = 50,n_patch=100, de = 'g', n_simul = 100, 
+n_gen = 100, patch_size = 50,n_patch=100, log_by = 'g', n_rep = 100, 
 a=2,c=1., threshold = 0.65)
 
 res=evol_model(parameters_example,threshold_public_good_game,reproduction_WF)
@@ -184,7 +184,7 @@ res=evol_model(parameters_example,threshold_public_good_game,reproduction_WF)
 
 #-----------------------------------------------
 #*** 4. Dyadic game
-# Demonstrates (i) structured population, (ii) integer trait, (iii) additional parameters
+# Demonstrates (i) structured population, (ii) integer trait, (iii) derived parameters
 #-----------------------------------------------
 
 #--- Model description
@@ -192,13 +192,11 @@ res=evol_model(parameters_example,threshold_public_good_game,reproduction_WF)
 
 using Random
 
-# Define payoff matrix via additional parameters (R, S, T, P)
+# Construct the payoff matrix from R, S, T, P
 function define_payoff_matrix(; R, S, T, P, kwargs...)
     [P T; S R]
 end
 
-# Additional parameters: underscore prefix prevents saving to output
-additional_parameters = Dict(:_payoff_matrix => define_payoff_matrix)
 
 function get_payoff_from_payoff_matrix(pair_of_players, _payoff_matrix)
     i, j = Int(pair_of_players[1]) + 1, Int(pair_of_players[2]) + 1
@@ -226,28 +224,27 @@ parameters_example = (
     z_ini = 1,
     mu_m = 0.005,
     boundaries = [0, 1],
-    n_ini = 1000,
-    de = 'g',
+    patch_size = 1000,
+    log_by = 'g',
     n_gen = 2000,
     R = 4.75,
     S = 0,
     T = 5,
-    P = 0
+    P = 0,
+    _payoff_matrix = Derived(define_payoff_matrix)
 )
 
 #-> Results: Cooperation collapses in well-mixed population
-res = evol_model(parameters_example, fitness_function_dyadic_game, reproduction_WF;
-    additional_parameters = additional_parameters)
+res = evol_model(parameters_example, fitness_function_dyadic_game, reproduction_WF)
 
 @with res plot(:gen, :global_mean_z, group = :i_simul, ylims = [0, 1], legend = false)
 
-#-> Partial cooperation is maintained through spatial structure
-parameters_example = (z_ini = 1, mu_m = 0.005, boundaries= [0,1],n_ini=10, de ='g',n_gen=2000, 
+#-> Partial cooperation is maintained in presence of spatial structure
+parameters_example = (z_ini = 1, mu_m = 0.005, boundaries= [0,1],patch_size=10, log_by ='g',n_gen=2000, 
 n_patch = 500, mig_rate= 0.05,
-R = 4.75, S = 0, T = 5, P = 0)
+R = 4.75, S = 0, T = 5, P = 0,_payoff_matrix = Derived(define_payoff_matrix))
 
-res=evol_model(parameters_example,fitness_function_dyadic_game,reproduction_WF_island_model_hard_selection; 
-additional_parameters =additional_parameters)
+res=evol_model(parameters_example,fitness_function_dyadic_game,reproduction_WF_island_model_hard_selection!)
 
 @with res plot(:gen,:global_mean_z,group=:i_simul,ylims=[0,1],legends=false)
 
@@ -277,10 +274,10 @@ parameters_example = (
     sigma_m = 0.1,
     boundaries = [0.0, 1.0],
     n_patch = 10,
-    n_ini = 50,
+    patch_size = 50,
     n_gen = 5000,
-    de = 'p',
-    other_output_name = ["Benefit_group"],
+    log_by = 'p',
+    extras_names = ["Benefit_group"],
     k = 5,
     cost = 0.1,
     benefit = 5.0
@@ -312,8 +309,8 @@ parameters_example = (
     sigma_m = [0.1, 0.1],                    
     boundaries = [[-5.0, 5.0], [-5.0, 5.0]], 
     n_gen = 5000,
-    n_simul = 20,
-    de = 'g',
+    n_rep = 20,
+    log_by = 'g',
     o_x = -2.0,
     o_y = 2.0,
     sigma = 3.0,
@@ -328,12 +325,11 @@ res = evol_model(parameters_example, cobb_douglas, reproduction_WF)
 
 #-----------------------------------------------
 #*** 7. Ecological model of growth
-# Demonstrates (i) additional parameters computed at the beginning of the simulation, (ii) varying population size, (iii) migration
+# Demonstrates (i) parameters computed at the beginning of the simulation, (ii) varying population size, (iii) migration
 #-----------------------------------------------
 
 #--- Model description
 # - Each group has its own carrying capacity `K` drawn from a Normal distribution
-# - Fitness is constant, but number of offspring is limited by K per group
 
 function ecological_fitness(z::Vector{<:Vector}; r, K, kwargs...)
     fitness = [fill(r / (1 + length(z[i]) / K[i]), length(z[i])) for i in 1:length(z)]
@@ -349,24 +345,23 @@ reset_default_parameters!()
 
 parameters_example = Dict(
     :z_ini => true,
-    :n_ini => 10, :n_patch => 20,
+    :patch_size => 10, :n_patch => 20,
     :n_gen => 100,
     :mean_K => 100, :sd_K => 30,
-    :de => 'p',
+    :log_by => 'p',
     :r => 2,
-    :mig_rate => 0.05
+    :mig_rate => 0.05,
+    :K => Derived(draw_K)
 )
 
 
 #--- Results: Groups grow to different sizes based on drawn K values
-res = evol_model(parameters_example, ecological_fitness, reproduction_explicit_poisson,
-additional_parameters = Dict(:K => draw_K), migration_function= random_migration!)
+res = evol_model(parameters_example, ecological_fitness, reproduction_explicit_poisson, migration_function= random_migration!)
 @with res plot(:gen, :group_size, group = :patch, legend = false)
 
-#--- Results: High migration rate just homogeneise the group sizes
+#--- Results: High migration rate homogeneises the group sizes
 parameters_example[:mig_rate] = 0.8
-res = evol_model(parameters_example, ecological_fitness, reproduction_explicit_poisson,
-additional_parameters = Dict(:K => draw_K), migration_function= random_migration!)
+res = evol_model(parameters_example, ecological_fitness, reproduction_explicit_poisson, migration_function= random_migration!)
 @with res plot(:gen, :group_size, group = :patch, legend = false)
 
 #-----------------------------------------------
@@ -375,7 +370,7 @@ additional_parameters = Dict(:K => draw_K), migration_function= random_migration
 #-----------------------------------------------
 
 #--- Model description
-# - Individuals are diploid (controlled via `:n_loci`)
+# - Compare asexual reproduction with diploid sexual reproduction
 # - Fitness favors extreme phenotypes (disruptive selection)
 
 function disruptive_fitness(z::Vector;  strength, kwargs...)
@@ -390,12 +385,12 @@ parameters_example = Dict(
     :mu_m => 0.005,
     :boundaries=>[-1.,1.],
     :n_gen => 2000,
-    :n_ini => 500,
+    :patch_size => 500,
     :n_loci => 0,
-    :delta => 0.5,
-    :de => 'i',
+    :allele_eff => 0.5,
+    :log_by => 'i',
     :strength =>0.005,
-    :j_print=>20
+    :log_every=>20
 )
 
 #-> Results: Disruptive selection maintains polymorphism
@@ -425,16 +420,16 @@ end
 parameters_example = Dict(
     :z_ini => Normal(0.1, 0.1),
     :n_gen => 3000,
-    :n_ini => 10000,
+    :patch_size => 10000,
     :n_patch => 1,
     :str_selection => 1.0,
     :mu_m => 0.005,
     :sigma_m => 0.1,
     :boundaries => [0.0, 1.0],
-    :other_output_names => ["distance_to_optimal"],
+    :extras_names => ["distance_to_optimal"],
     :write_file => false,
-    :parameters_to_omit => ["n_loci", "j_print"],
-    :de => 'g',
+    :parameters_to_omit => ["n_loci", "log_every"],
+    :log_by => 'g',
     :optimal => 0.5,
     :sigma => 1.0
 )
@@ -463,3 +458,4 @@ end
 #-> less allocation
 @btime res = evol_model(parameters_example, gaussian_fitness_function!, reproduction_WF);
 @with res plot(:gen, :global_mean_z, ylims = [0, 1])
+

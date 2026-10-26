@@ -1,8 +1,28 @@
 # Changelog
 
-## [0.2.5]
-- mutation rate put to 0 when sd is 0 too. Avoid bug with truncated distribution of 0 variance.
-- _abbreviate for filename now work for vector of non-number
+## [0.3.0] - 2026-10-26
+### Breaking
+- Renamed built-in parameters: `n_print` → `log_from`, `j_print` → `log_every`, `de` → `log_by`, `simplify` → `flatten_single_patch`, `n_simul` → `n_rep`, `split_simul` → `split_rep`, `n_ini` → `patch_size`, `delta` → `allele_eff`, `other_output_names` → `extras_names`. Old names still work with a deprecation warning.
+- Derived parameters are now given directly in `parameters` as `name = Derived(f)`. The `additional_parameters` keyword of `evol_model` is removed.
+- Removed `additional_parameters_to_omit`. Derived parameters to hide go in `parameters_to_omit` (the old name still works with a warning).
+- Sweeping over `Derived` values is not allowed. Sweep over a normal parameter read by the function instead.
+- `z_ini` given as a table must be a `DataFrame` (not a view) containing a single simulation.
+- `random_migration` and `random_migration!` only work with explicit reproduction, since they change patch sizes. An error is raised otherwise.
+- `boundaries` no longer has a default value, including in `mutation!`.
+
+### Added
+- `parameter_constraints`: user function checking the parameters before running.
+
+### Fixed
+- Mutation rate set to 0 when `sigma_m` is 0, avoiding an error with zero-variance truncated distributions.
+- Filename abbreviation works for vectors of non-numbers.
+- In-place migration with `mig_rate = 0` no longer reverts to the previous population. In-place migration functions now return `false` when migration is skipped. Migration is skipped with a single patch.
+- Continuing from a DataFrame: `n_patch` and `patch_size` are taken from the table, and a table without `i_simul` keeps the new run's ID.
+- Sexual reproduction with several loci and the default mapping now runs (requires Boolean alleles).
+- `reproduction_WF_island_model_hard_selection!` is now exported.
+- A swept parameter not in `parameters` is now included in the filename, so sweeps no longer overwrite each other's file.
+- Function to save output for the case `n_cst = false` and `log_by = i`.
+- Simulation, in-place fitness function + @extras. Do not change output when it should not print, so it does not write NaN.
 
 ## [0.2.4] - 2026-10-20
 - Change the sort parameters when building filename so it works without dependencies (dictionnary cannot be sort with the base julia)

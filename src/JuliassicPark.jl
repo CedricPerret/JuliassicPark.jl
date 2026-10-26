@@ -31,7 +31,7 @@ list_reproduction_methods, list_reproduction_functions, list_migration_methods, 
 reproduction_WF, reproduction_WF!, reproduction_Moran_DB!, reproduction_Moran_BD!, reproduction_Moran_pairwise_learning!,
 reproduction_WF_copy_group_trait!, 
 reproduction_WF_island_model_fixed_migrant_fraction,reproduction_WF_island_model_fixed_migrant_fraction!,
-reproduction_WF_island_model_hard_selection, creproduction_WF_island_model_hard_selection!, reproduction_WF_island_model_soft_selection, reproduction_WF_island_model_soft_selection!,
+reproduction_WF_island_model_hard_selection!, reproduction_WF_island_model_soft_selection, reproduction_WF_island_model_soft_selection!,
 reproduction_explicit_poisson,
 reproduction_WF_sexual, reproduction_WF_sexual!,
 average_mapping, additive_mapping, recombination,
@@ -42,7 +42,7 @@ random_int_except, remove_index, sample_except, create_interval, create_interval
 curve_plateau,curve_plateau_sublinear, curve_sigmoid, curve_sigmoid_decreasing,
 vv_empty,vv,vv_rand,vv_big,
 coef_linear_regression, normalised, random_pairing, random_grouping, argextreme, power!,
-get_parameters_from_sweep, lift_map,add_eps!, get_ind,
+get_parameters_from_sweep, lift_map,add_eps!, get_ind, Derived,
 @extras
 
 end

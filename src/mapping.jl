@@ -13,10 +13,10 @@ average_mapping(genotypes::Tuple) = map(average_mapping, genotypes)
 
 #--- Trait is sum of genotype
 """
-    additive_mapping(population::AbstractMatrix, delta)
+    additive_mapping(population::AbstractMatrix, allele_eff)
 
-Maps a boolean genotype matrix to a phenotype by computing the additive effect `delta × (2A - 2n)`,
+Maps a boolean genotype matrix to a phenotype by computing the additive effect `allele_eff × (2A - 2n)`,
 where `A` is the number of true alleles and `n` is the number of loci.
 """
-additive_mapping(genotype::AbstractMatrix{Bool}, delta) = delta * (2 * sum(genotype) - 2 * size(genotype, 1))
-additive_mapping(genotypes::Tuple, delta) = map(g -> additive_mapping(g, delta), genotypes) 
+additive_mapping(genotype::AbstractMatrix{Bool}, allele_eff) = allele_eff * (2 * sum(genotype) - 2 * size(genotype, 1))
+additive_mapping(genotypes::Tuple, allele_eff) = map(g -> additive_mapping(g, allele_eff), genotypes) 

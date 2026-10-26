@@ -49,9 +49,12 @@ function _build_filename(wd::String, parameters::Dict, parameters_to_omit::Vecto
     for i in parameters_to_omit
         delete!(parameters_copy,i)
     end
+    #--- For now, never put the functions of derived parameters (user can get the values generated)
+    filter!(parameters_copy -> !(last(parameters_copy) isa Derived), parameters_copy)
+
     #--- Replace the parameter we vary by first -> last value
     for (key, sweep_vals) in swept
-        if haskey(parameters_copy, key)
+        if key ∉ parameters_to_omit && !(first(sweep_vals) isa Derived)
             parameters_copy[key] = string(sweep_vals[1], "→", sweep_vals[end])
         end
     end
@@ -65,7 +68,7 @@ function _build_filepath(wd::String, parameters::Dict, parameters_to_omit::Vecto
     return wd * name_file * format
 end
 
-#--- Variant for split_simul=true: appends simulation ID
+#--- Variant for split_rep=true: appends simulation ID
 function _build_filepath(wd::String,parameters::Dict,parameters_to_omit::Array{Symbol,1},format::String,i_simul::Int64; swept=Dict{Symbol,Vector}())
     name_file = _build_filename(wd, parameters, parameters_to_omit, format; swept=swept)
     return wd * name_file * "-S="*string(i_simul)*format
@@ -168,22 +171,22 @@ function _infer_variable_resolution(output;n_patch=1)
 end
 
 """
-    init_data_output(de, output_names, output_example, n_gen, gen_first_print, print_every,
+    init_data_output(log_by, output_names, output_example, n_gen, gen_first_print, print_every,
                      i_simul, n_patch, n_pop, n_cst;
                      output_cst_names=[], output_cst=[]) -> (DataFrame, Function)
 
 Create a `DataFrame` to store model outputs and return a saving function to fill it during a simulation.
 
-Each element of the output is classified by its structure (generation-, patch-, or individual-level), and transformed to match the desired level of detail specified by the user in `de`.
+Each element of the output is classified by its structure (generation-, patch-, or individual-level), and transformed to match the desired level of detail specified by the user in `log_by`.
 
-If the detail level (`de`) is higher than the level of the variable (e.g., trying to print a scalar per individual), the output is repeated. If it is lower (e.g., a per-individual value printed per generation), it is averaged.
+If the detail level (`log_by`) is higher than the level of the variable (e.g., trying to print a scalar per individual), the output is repeated. If it is lower (e.g., a per-individual value printed per generation), it is averaged.
 
 If `n_cst = true`, the population size is assumed constant, and the DataFrame is preallocated for faster writing. If `n_cst = false`, data is appended dynamically each time output is saved.
 
 Trait values are extracted from the first element of `output_example`, and if they are stored as tuples, one column is created per trait (`z1`, `z2`, etc.). Other columns are named using `output_names`, or default names like `V1`, `V2`, etc.
 
 # Arguments
-- `de::Char`: Desired level of data resolution (`'g'` for generation, `'p'` for patch, `'i'` for individual).
+- `log_by::Char`: Desired level of data resolution (`'g'` for generation, `'p'` for patch, `'i'` for individual).
 - `output_names::Vector{String}`: Names of the outputs. If too short, default names are added.
 - `output_example::Vector`: Example output used to infer structure and types.
 - `n_gen::Int`: Total number of generations.
@@ -202,7 +205,7 @@ Trait values are extracted from the first element of `output_example`, and if th
 
 # Notes
 - Generation = one call to the reproduction function (Moran or Wright–Fisher logic).
-- Constant outputs (e.g. `ID`, `K`, or parameters) are repeated automatically depending on `de` and `n_cst`.
+- Constant outputs (e.g. `ID`, `K`, or parameters) are repeated automatically depending on `log_by` and `n_cst`.
 
 # Output types (inferred from `output_example`)
 - `'G'`: Scalar → generation-level
@@ -211,9 +214,9 @@ Trait values are extracted from the first element of `output_example`, and if th
 - `'i'`: Vector of `n_patch` vectors of length `n_pop` → individual-level (structured)
 - `'I'`: Vector of length `n_patch * n_pop` → individual-level (well-mixed)
 """
-function init_data_output(de,output_names::Vector{String},output_example,n_gen::Int, gen_first_print::Int, print_every::Int, i_simul, n_patch::Int, n_pop::Int, n_cst::Bool; output_cst_names=[],output_cst=[], n_traits)
+function init_data_output(log_by,output_names::Vector{String},output_example,n_gen::Int, gen_first_print::Int, print_every::Int, i_simul, n_patch::Int, n_pop::Int, n_cst::Bool; output_cst_names=[],output_cst=[], n_traits)
     #--- Safety checks
-    @assert de in ['g', 'p', 'i'] "Invalid value for `de`: expected one of 'g', 'p', or 'i'."
+    @assert log_by in ['g', 'p', 'i'] "Invalid value for `log_by`: expected one of 'g', 'p', or 'i'."
     @assert n_patch ≥ 1 "Expected `n_patch` to be a positive integer."
     @assert n_pop ≥ 1 "Expected `n_pop` to be a positive integer."
     @assert n_gen ≥ 1 "Expected `n_gen` to be a positive integer."
@@ -223,7 +226,7 @@ function init_data_output(de,output_names::Vector{String},output_example,n_gen::
     for i in 1:length(output_example)
             @assert length(output_example[i]) == 1 || length(output_example[i]) == n_patch || (length(output_example[i]) == n_pop && !(isa(output_example[i][1], Vector))) || (isa(output_example[i][1], Vector) && length(output_example[i][1]) == n_pop) "The variable to save `:$(Symbol(output_names[i]))` must have resolution compatible with the model: " *
             "either one value per generation, per patch (length = n_patch), or per individual " *
-            "(length = n_patch, with sub-vectors of length n_ini)."
+            "(length = n_patch, with sub-vectors of length patch_size)."
     end
 
     #--- Number of generation to print 
@@ -246,7 +249,7 @@ function init_data_output(de,output_names::Vector{String},output_example,n_gen::
 
     ## Each output is modified (correction_function) to fit the resolution required by the user.
     #*** Results required at the generation level
-    if de == 'g'
+    if log_by == 'g'
         #--- Create the vector of functions to apply to each output 
         correction_function = replace(level_output,
         'g'=>(x->x[1]),
@@ -304,7 +307,7 @@ function init_data_output(de,output_names::Vector{String},output_example,n_gen::
             get_base_output = (i_gen, n_pop) -> [[i_simul], [i_gen],[correction_function_cst[i](output_cst[i]) for i in eachindex(output_cst_names)]...]
         end
     #*** Results at the PATCH level
-    elseif de == 'p'
+    elseif log_by == 'p'
         #--- Create the vector of functions to apply to each output 
         #@Iterators.partition faster than list comprehension
         correction_function = replace(level_output,
@@ -369,7 +372,7 @@ function init_data_output(de,output_names::Vector{String},output_example,n_gen::
             [correction_function_cst[i](output_cst[i]) for i in eachindex(output_cst_names)]...]
         end
     #*** Print variables at the level of the INDIVIDUAL 
-    elseif de == 'i'
+    elseif log_by == 'i'
         #--- Create the vector of functions to apply to each output 
         correction_function = replace(level_output,
         'g'=>(x->fill(x[1],n_pop*n_patch)),
@@ -422,12 +425,17 @@ function init_data_output(de,output_names::Vector{String},output_example,n_gen::
             ["i_simul","gen","patch","ind",output_cst_names...,output_names...]
             )
             ## Create the function to add the constant output. 
-            correction_function_cst= correction_function
+            correction_function_cst = replace(type_output_cst,
+                'g' => ((x, group_sizes) -> fill(x[1], sum(group_sizes))),
+                'G' => ((x, group_sizes) -> fill(x, sum(group_sizes))),
+                'p' => ((x, group_sizes) -> collect(Iterators.flatten((fill(x[i], group_sizes[i]) for i in 1:n_patch)))))
+
             get_base_output = (i_gen, n_pop) -> [fill(i_simul,  sum(n_pop)),
             fill(i_gen, sum(n_pop)),
             collect(Iterators.flatten((fill(i, n_pop[i]) for i in 1:length(n_pop)))),
-            collect(Iterators.flatten((collect(1:n_pop[i]) for i in 1:length(n_pop)))),
-            [correction_function_cst[i](output_cst[i]) for i in eachindex(output_cst_names)]...]
+            collect(1:sum(n_pop)),
+            [correction_function_cst[i](output_cst[i], n_pop) for i in eachindex(output_cst_names)]...]
+
         end
     end
     #*** Create saving function
@@ -453,13 +461,13 @@ function init_data_output(de,output_names::Vector{String},output_example,n_gen::
                     return
                 end
                 ## Here we add a single row. For append, we need a vector while for the n_cst = true, scalar are ok.
-                group_sizes = length.(output[2]) 
+                group_sizes = output[2] isa AbstractVector{<:AbstractVector} ? length.(output[2]) : [length(output[2])]
 
-                if de == 'g'
+                if log_by == 'g'
                     corrected_output = map(x->[x],[correction_function[i](corrected_output_for_n_trait[i]) for i in eachindex(correction_function)])
-                elseif de == 'p'
+                elseif log_by == 'p'
                     corrected_output = [correction_function[i](corrected_output_for_n_trait[i]) for i in eachindex(correction_function)]
-                elseif de == 'i'
+                elseif log_by == 'i'
                     #-> Size of output varies
                     corrected_output = [correction_function[i](corrected_output_for_n_trait[i], group_sizes) for i in eachindex(correction_function)]
                 end
@@ -479,11 +487,11 @@ function init_data_output(de,output_names::Vector{String},output_example,n_gen::
     return(df_res, save_data_to_df)
 end
 
-should_it_print(i_gen,n_print,j_print) = (i_gen-n_print) % j_print == 0 && i_gen >= n_print
+should_it_print(i_gen,log_from,log_every) = (i_gen-log_from) % log_every == 0 && i_gen >= log_from
 
-function _filter_cst_for_de(type_output_cst::Vector{Char}, de::Char)
-    drop = de == 'g' ? ['i','I','p'] :
-           de == 'p' ? ['i','I']     :
+function _filter_cst_for_de(type_output_cst::Vector{Char}, log_by::Char)
+    drop = log_by == 'g' ? ['i','I','p'] :
+           log_by == 'p' ? ['i','I']     :
                        Char[]
     keep = .!(type_output_cst .∈ Ref(drop))
     return type_output_cst[keep]

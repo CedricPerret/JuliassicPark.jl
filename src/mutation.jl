@@ -142,7 +142,7 @@ end
 
 
 """
-    mutation!(population::Vector{Float64}, mu_m; mutation_type=:normal, boundaries=(0.0, 1.0), kwargs...)
+    mutation!(population::Vector{Float64}, mu_m; mutation_type=:normal, boundaries, kwargs...)
 
 Efficient in-place mutation of a vector of continuous traits.
 
@@ -173,7 +173,8 @@ mutation!(pop, 0.3; sigma_m=0.1, boundaries=(0.0, 1.0))
 mutation!(pop, 0.01; mutation_type=:gumbel, sigma_m=0.1, bias_m=0.2, boundaries=(0.0, 1.0))
 ```
 """
-function mutation!(population::Vector{Float64},mu_m; mutation_type::Symbol = :normal, boundaries = (0.0, 1.0), kwargs...)
+
+function mutation!(population::Vector{Float64},mu_m; mutation_type::Symbol = :normal, boundaries, kwargs...)
     T = Val(mutation_type)
     @inbounds for i in eachindex(population)
         if rand() < mu_m
@@ -183,7 +184,7 @@ function mutation!(population::Vector{Float64},mu_m; mutation_type::Symbol = :no
     end
 end
 
-function mutation!(population::Vector{Vector{Float64}},mu_m; mutation_type::Symbol = :normal, boundaries = (0.0, 1.0), kwargs...)
+function mutation!(population::Vector{Vector{Float64}},mu_m; mutation_type::Symbol = :normal, boundaries, kwargs...)
     T = Val(mutation_type)
     @inbounds for i in eachindex(population)
         for j in eachindex(population[i])

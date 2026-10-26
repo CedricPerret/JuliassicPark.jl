@@ -1,10 +1,11 @@
 #***********************************************
 #*** Migrations function
 #***********************************************
+#! In-place migration function returns false to skip migration.
 
 """
     random_migration(metapop; mig_rate)
-    random_migration!(new_metapop, metapop; mig_rate)
+    random_migration!(metapop, new_metapop; mig_rate)
 
 Redistribute individuals across patches by independent migration.
 
@@ -28,12 +29,13 @@ Each individual has probability `mig_rate` of moving to a randomly chosen *other
 
 # Notes
 - Migration never returns an individual to its own patch (`random_int_except` is used).
-- If `mig_rate == 0` or only one patch exists, the population is returned unchanged.
+- If `mig_rate == 0` or only one patch exists, return flag to not do migration
 """
 function random_migration!(metapop::Vector{Vector{T}}, new_metapop ; mig_rate::Float64, kwargs...) where T
     n_patches = length(metapop)
     #-> If no migration possible, skip
-    (n_patches == 1 || mig_rate == 0.) && return(nothing)
+    (n_patches == 1 || mig_rate == 0.) && return false
+    
     ## Cutoff chosen by trial and error.
     if sum(length.(metapop)) * mig_rate < 2000
         #-> Few migrants: use the non-allocating version
