@@ -137,6 +137,7 @@ A key element of an evolutionary model is that traits can mutate. At minimum, pr
 - **Continuous traits (Float)** — a new value is drawn according to `mutation_type` within `boundaries`. Available options are:
   - `:normal` (default) — truncated Normal distribution centred on the current trait value.
   - `:normal_clamped` — Normal mutation with values outside `boundaries` clamped to the nearest boundary.
+  - `:normal_biased` — truncated Normal distribution centred on the current trait value * (1-`epsilon`) + `bias_m`.
   - `:gumbel` — truncated Gumbel distribution; use `bias_m` to introduce directional bias.
 
 ### What happens at each generation

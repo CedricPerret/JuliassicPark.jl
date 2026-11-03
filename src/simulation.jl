@@ -79,7 +79,6 @@ function evol_model(parameters_input, fitness_function, repro_function;
         :simplify => :flatten_single_patch,
         :n_simul => :n_rep,
         :split_simul => :split_rep,
-        :delta => :allele_eff,
         :n_ini => :patch_size,
         :other_output_names => :extras_names
     )
@@ -197,7 +196,7 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         (parameters[:z_ini] isa DataFrame && parameters[:log_from] == 1) && (parameters[:log_from] += 1)
 
         #--- Normalise the trait relevant parameters (depending of number of traits, need to unwrap or copy) + reorganise them in the right format
-        mut_kwargs_names = [:sigma_m, :boundaries, :mutation_type,:bias_m] 
+        mut_kwargs_names = [:sigma_m, :boundaries, :mutation_type,:bias_m, :epsilon_m] 
         _normalise_trait_parameters!(parameters,[:mu_m; mut_kwargs_names], n_traits)
         # If sigma_m is zero, set the corresponding mutation probability to zero.
         if haskey(parameters, :sigma_m) && parameters[:sigma_m] !== nothing
@@ -207,10 +206,19 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
                 parameters[:mu_m] = [s == 0.0 ? 0.0 : m for (m, s) in zip(parameters[:mu_m], parameters[:sigma_m])]
             end
         end
+        # Mutation type as a Val, made once for the whole run (see _as_val in the mutation file)
+        if haskey(parameters, :mutation_type)
+            if n_traits == 1
+                parameters[:mutation_type] = _as_val(parameters[:mutation_type])
+            else
+                parameters[:mutation_type] = _as_val.(parameters[:mutation_type])
+            end
+        end
+
         ## Move from sigma_m = [sigma_m1,sigma_m2], bias_m = [bias_m1,bias_m2] to param_trait1 = [sigma_m = sigma_m1, bias_m=bias_m1]
         ## which can be given as a whole to mutation
         mut_kwargs = _prepare_kwargs_multiple_traits(parameters, mut_kwargs_names, n_traits)
-
+        
         #--- Initialise the population 
         population = initialise_population(parameters[:z_ini], parameters[:patch_size], parameters[:n_patch];  boundaries = get(parameters, :boundaries, nothing), flatten_single_patch = parameters[:flatten_single_patch],n_loci = parameters[:n_loci])
         

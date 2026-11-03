@@ -106,11 +106,11 @@ parameters_example = Dict(
     :n_patch => 2,
     :str_selection => 1.0,
     :mu_m => 0.005,
-    :sigma_m => Derived((; kwargs...) -> rand([0.1, 0.2])),
+    :sigma_m => 0.001,
     :boundaries => [0.0, 1.0],
     :write_file => false,
     :log_by => 'g',
-    :optimal => 0.6,
+    :optimal => Derived((; kwargs...) -> rand([0.5, 0.55])),
     :sigma => 1.0,
     :log_every => 1
 )
@@ -144,6 +144,27 @@ end
     # Invalid parameters
     params[:sigma] = 0.0
     @test_throws AssertionError evol_model(params, gaussian_fitness_function, reproduction_WF; parameter_constraints = parameter_constraints_test)
+end
+
+@testset "mutation types – single trait, simple WF run" begin
+    for mutation_type in (:normal, :normal_clamped, :normal_biased, :gumbel)
+        local params = deepcopy(parameters_example)
+        params[:n_gen] = 5
+        params[:patch_size] = 100
+        params[:n_patch] = 2
+        params[:log_by] = 'i'
+        ## Frequent and large mutations, so that the mutation type is actually used
+        params[:mu_m] = 0.5
+        params[:sigma_m] = 0.1
+        params[:mutation_type] = mutation_type
+        params[:bias_m] = 0.05
+        params[:epsilon_m] = 0.1
+
+        res = evol_model(params, gaussian_fitness_function, reproduction_WF)
+
+        @test !isempty(res)
+        @test all(0.0 .<= res.z .<= 1.0)
+    end
 end
 
 #*** Two traits float

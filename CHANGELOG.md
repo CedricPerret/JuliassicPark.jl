@@ -1,4 +1,10 @@
 # Changelog
+## [0.3.1] - 2026-11-03
+- Removed `delta` from deprecated, it easily conflict with user-defined parameter.
+- Added the mutation type `:normal_biased` (truncated `Normal((1 - epsilon_m) * x + bias_m, sigma_m)`) and added its parameter `epsilon_m` to mut_kwargs.
+- `mutation_type` is now converted once to a `Val` at the start of each run (`_as_val` in `get_template_model`), so the mutation method is chosen in advance instead of at each mutation. Faster mutation and far fewer allocations, especially for several traits (tuples) and high mutation rates.
+- Mutation functions now expect `mutation_type` as a `Val` (default `Val(:normal)`). A `Symbol` is still accepted for direct calls, but is converted at each call (slower).
+- Truncated normal mutations (`:normal`, `:normal_biased`) are now drawn by redrawing until the value is inside the boundaries (`_TruncatedNormalByRejection`), instead of building a `Truncated` object at each mutation. This is the algorithm Distributions uses in this case, so results with the same seed are unchanged for `:normal`.
 
 ## [0.3.0] - 2026-10-26
 ### Breaking

@@ -2,6 +2,16 @@
 #*** Mutation function
 #***********************************************
 
+#--- Compatibility: mutation type given as a name (e.g. a direct call by hand). Converted to a Val at each call, so slower;
+#--- simulations pass a Val (converted once at the start of the run) and never use these two methods.
+mutation(x::Float64, mu_m::Float64, mutation_type::Symbol; kwargs...) = mutation(x, mu_m, Val(mutation_type); kwargs...)
+_get_mutation_distribution(x::Float64, mutation_type::Symbol; kwargs...) = _get_mutation_distribution(x, Val(mutation_type); kwargs...)
+
+#--- Used once at the start of each run (get_template_model) to turn the mutation type into a Val
+_as_val(mutation_type::Symbol) = Val(mutation_type)
+_as_val(mutation_type::Val) = mutation_type
+_as_val(mutation_type) = mutation_type
+
 #--- The logic behind the dev
 ## To make the interface flexible and efficient, we use multiple dispatch for core logic and add `kwargs...` to allow passing extra arguments when needed.
 ## This allows for julia to specialise each function while being flexible
@@ -22,7 +32,7 @@ Mutates a trait value `trait_value` with a mutation probability `mu`. The type o
 ### Keyword arguments (depending on trait type)
 
 **For continuous (`Float64`) traits:**
-- `mutation_type::Symbol`: Type of distribution to use (`:normal`, `:gumbel`, etc.).
+- `mutation_type::Union{Val,Symbol}`: Type of distribution to use (`Val(:normal)`, `Val(:gumbel)`, etc.). A `Val` is the fast form, used by simulations (converted once at the start of the run). A `Symbol` (`:normal`, `:gumbel`, etc.) is also accepted for direct calls, but is converted to a `Val` at each call (slower).
 - `sigma_m::Float64`: Standard deviation or scale.
 - `bias_m::Float64` (optional): Directional bias (used by some mutation types).
 - `boundaries::Tuple{Float64, Float64}`: Lower and upper bounds.
@@ -38,9 +48,10 @@ Mutates a trait value `trait_value` with a mutation probability `mu`. The type o
 
 ### Examples
 ```julia
-mutation(0.5, 0.1; mutation_type=:normal, sigma_m=0.1, boundaries=(0.0, 1.0))  # Float64
-mutation(2, 0.2; boundaries=(0, 4))                                            # Int
-mutation(true, 0.5)                                                            # Bool
+mutation(0.5, 0.1; mutation_type=Val(:normal), sigma_m=0.1, boundaries=(0.0, 1.0))  # Float64 (fast form)
+mutation(0.5, 0.1; mutation_type=:normal, sigma_m=0.1, boundaries=(0.0, 1.0))       # Float64 (Symbol, also works)
+mutation(2, 0.2; boundaries=(0, 4))                                                 # Int
+mutation(true, 0.5)                                                                 # Bool
 mutation(0.5, 0.99; mutation_type=:normal_clamped, sigma_m=2, boundaries=(0.0, 1.0)) #Clamped
 ```
 """
@@ -67,8 +78,8 @@ end
 
 #--- Continuous traits
 ## Wrapper that dispatches to the type-specific mutation function via `Val{T}`. Each method is specialised by Julia's compiler.
-@inline function mutation(x::Float64, mu_m::Float64; mutation_type=:normal, kwargs...)
-    return mutation(x, mu_m, Val(mutation_type); kwargs...)
+@inline function mutation(x::Float64, mu_m::Float64; mutation_type=Val(:normal), kwargs...)
+    return mutation(x, mu_m, mutation_type; kwargs...)
 end
 
 # Mutates a Float64 trait using the specified mutation type `T` (e.g. :normal, :gumbel).
@@ -101,8 +112,9 @@ end
 Returns a mutation distribution centered around the trait value `x`, used to generate bounded mutations.
 
 Supported mutation types:
-- `:normal`: Truncated `Normal(x, sigma_m)` distribution.
+- `:normal`: Truncated `Normal(x, sigma_m)` distribution (drawn by redrawing, see `_TruncatedNormalByRejection`).
 - `:normal_clamped`: Clamped `Normal(x, sigma_m)` distribution.
+- `:normal_biased`: Truncated `Normal((1 - epsilon_m) * x + bias_m, sigma_m)` distribution (drawn by redrawing, see `_TruncatedNormalByRejection`).
 - `:gumbel`: Truncated `Gumbel(x + bias_m, sigma_m)` distribution.
 
 Arguments:
@@ -110,10 +122,11 @@ Arguments:
 - `::Val{:type}`: Mutation type (`Val(:normal)`, `Val(:gumbel)`, etc.).
 - `sigma_m::Float64`: Standard deviation or scale parameter of the distribution.
 - `boundaries::Tuple{Float64, Float64}`: Lower and upper bounds.
-- `bias_m::Float64` (optional): Shift used in the `:gumbel` distribution.
+- `bias_m::Float64` (optional): Shift used in the `:gumbel` and `:normal_biased` distributions.
+- `epsilon_m::Float64`: Factor reducing the trait value before the shift, used in the `:normal_biased` distribution (mean `(1 - epsilon_m) * x + bias_m`).
 
 Returns:
-- A distribution that can be sampled with `rand`.
+- A distribution that can be sampled with `rand` (for `:normal` and `:normal_biased`, a `_TruncatedNormalByRejection`).
 
 Throws:
 - An error if the mutation type is not implemented.
@@ -121,19 +134,44 @@ Throws:
 Examples:
 ```julia
 _get_mutation_distribution(0.5, Val(:normal); sigma_m=0.1, boundaries=(0.0, 1.0))
+_get_mutation_distribution(0.5, Val(:normal_biased); sigma_m=0.1, bias_m=0.05, epsilon_m=0.1, boundaries=(0.0, 1.0))
 _get_mutation_distribution(0.5, Val(:gumbel); sigma_m=0.1, bias_m=0.2, boundaries=(0.0, 1.0))
+```
 """
 function _get_mutation_distribution(x::Float64, ::Val{:normal}; sigma_m, boundaries, kwargs...)
-    Truncated(Normal(x, sigma_m), boundaries...)
+    _TruncatedNormalByRejection(x, sigma_m, boundaries[1], boundaries[2])
 end
+
+#@ To be faster we make our own draw: we redraw from Normal(x, sigma_m) until the value is inside the boundaries, without building a Truncated object (which computes the cdf at both boundaries at each mutation).
+#@ This is also what Distributions does when most of the distribution is inside the boundaries (tp > 0.3).
+struct _TruncatedNormalByRejection
+    mean::Float64; sigma::Float64; lower::Float64; upper::Float64
+end
+
+function Base.rand(d::_TruncatedNormalByRejection)
+    #-> If the trait is inside the boundaries and sigma is not larger than the interval, each draw is accepted with probability >= 0.34
+    if d.lower <= d.mean <= d.upper && d.sigma <= d.upper - d.lower
+        while true
+            value = d.mean + d.sigma * randn()
+            d.lower <= value <= d.upper && return value
+        end
+    end
+    #-> Otherwise, rejection could take many draws: use Distributions
+    return rand(truncated(Normal(d.mean, d.sigma), d.lower, d.upper))
+end
+
 
 function _get_mutation_distribution(x::Float64, ::Val{:normal_clamped}; sigma_m, boundaries, kwargs...)
     censored(Normal(x, sigma_m), boundaries...)
 end
 
+function _get_mutation_distribution(x::Float64, ::Val{:normal_biased}; sigma_m, bias_m=0.0, epsilon_m = 0.0, boundaries, kwargs...)
+    _TruncatedNormalByRejection((1 - epsilon_m) * x + bias_m, sigma_m, boundaries[1], boundaries[2])
+end
+
 #---Gumbel distribution for biased mutation (see Henrich paper 2017 Tasmanian ...)
 function _get_mutation_distribution(x::Float64, ::Val{:gumbel}; sigma_m, bias_m=0.0, boundaries, kwargs...)
-    Truncated(Gumbel(x + bias_m, sigma_m), boundaries...)
+    truncated(Gumbel(x + bias_m, sigma_m), boundaries...)
 end
 
 function _get_mutation_distribution(x::Float64, ::Val{T}; kwargs...) where T
@@ -142,7 +180,7 @@ end
 
 
 """
-    mutation!(population::Vector{Float64}, mu_m; mutation_type=:normal, boundaries, kwargs...)
+    mutation!(population::Vector{Float64}, mu_m; mutation_type=Val(normal), boundaries, kwargs...)
 
 Efficient in-place mutation of a vector of continuous traits.
 
@@ -151,7 +189,7 @@ This specialised method avoids repeated dispatch and keyword parsing by resolvin
 Arguments:
 - `population::Vector{Float64}`: Vector of continuous trait values.
 - `mu_m`: Mutation probability.
-- `mutation_type::Symbol`: Type of distribution (`:normal`, `:gumbel`, etc.).
+- `mutation_type::Val`: Type of distribution (`Val(:normal)`, `Val(:gumbel)`, etc.). A `Symbol` (`:normal`, ...) also works but is converted at each mutation (slower).
 - `boundaries::Tuple{Float64, Float64}`: Lower and upper bounds for the mutated trait values.
 - `kwargs...`: Additional parameters for the mutation distribution (e.g. `sigma_m`, `bias_m`).
 
@@ -173,29 +211,25 @@ mutation!(pop, 0.3; sigma_m=0.1, boundaries=(0.0, 1.0))
 mutation!(pop, 0.01; mutation_type=:gumbel, sigma_m=0.1, bias_m=0.2, boundaries=(0.0, 1.0))
 ```
 """
-
-function mutation!(population::Vector{Float64},mu_m; mutation_type::Symbol = :normal, boundaries, kwargs...)
-    T = Val(mutation_type)
+function mutation!(population::Vector{Float64},mu_m; mutation_type = Val(:normal), boundaries, kwargs...)
     @inbounds for i in eachindex(population)
         if rand() < mu_m
-            d = _get_mutation_distribution(population[i], T; boundaries=boundaries, kwargs...)
+            d = _get_mutation_distribution(population[i], mutation_type; boundaries=boundaries, kwargs...)
             population[i] = rand(d)
         end
     end
 end
 
-function mutation!(population::Vector{Vector{Float64}},mu_m; mutation_type::Symbol = :normal, boundaries, kwargs...)
-    T = Val(mutation_type)
+function mutation!(population::Vector{Vector{Float64}},mu_m; mutation_type = Val(:normal), boundaries, kwargs...)
     @inbounds for i in eachindex(population)
         for j in eachindex(population[i])
             if rand() < mu_m
-                distribution = _get_mutation_distribution(population[i][j], T; boundaries=boundaries, kwargs...)
+                distribution = _get_mutation_distribution(population[i][j], mutation_type; boundaries=boundaries, kwargs...)
                 population[i][j] = rand(distribution)
             end
         end
     end
 end
-
 
 function mutation!(population::Vector{T},mu_m; kwargs...) where T
     #@ Apparently, broadcasting does not allow conditional skipping so better to use loop
@@ -211,7 +245,7 @@ function mutation!(population::Vector{Vector{T}},mu_m; kwargs...) where T
 end
 
 """
-    mutation!(genotype::Matrix{Float64}, mu_m; mutation_type=:normal, kwargs...)
+    mutation!(genotype::Matrix{Float64}, mu_m; mutation_type=Val(:normal), kwargs...)
 
 In-place mutation of a diploid genotype represented as a `Matrix{Float64}`.
 
@@ -221,26 +255,24 @@ value is drawn from a distribution specified by `mutation_type` and `kwargs...`.
 # Arguments
 - `genotype`: A 2D matrix representing diploid alleles (rows: loci, columns: alleles).
 - `mu_m`: Per-allele mutation probability.
-- `mutation_type`: Type of mutation distribution (`:normal`, `:gumbel`, etc.).
+- `mutation_type::Val`: Type of distribution (`Val(:normal)`, `Val(:gumbel)`, etc.). A `Symbol` (`:normal`, ...) also works but is converted at each mutation (slower).
 - `kwargs...`: Additional mutation parameters (e.g., `sigma_m`, `boundaries`, `bias_m`).
 
 # Returns
 - The genotype is mutated in place.
 """
 #--- Non-haploid with allelic values (multiple loci)
-function mutation!(genotype::Matrix{Float64},mu_m; mutation_type=:normal, kwargs...)
-    T = Val(mutation_type)
+function mutation!(genotype::Matrix{Float64},mu_m; mutation_type=Val(:normal), kwargs...)
     for i in axes(genotype,1), j in axes(genotype,2)
         if rand() < mu_m
-            distribution = _get_mutation_distribution(genotype[i,j], T; kwargs...)
+            distribution = _get_mutation_distribution(genotype[i,j], mutation_type; kwargs...)
             genotype[i,j] = rand(distribution)
         end
     end
 end
 
 #--- Non-haploid with +/- effect (multiple loci)
-function mutation!(genotype::BitMatrix,mu_m; mutation_type=:normal, kwargs...)
-    T = Val(mutation_type)
+function mutation!(genotype::BitMatrix,mu_m; mutation_type=Val(:normal), kwargs...)
     for i in axes(genotype,1), j in axes(genotype,2)
         if rand() < mu_m
             genotype[i,j] = !(genotype[i,j])
@@ -248,13 +280,13 @@ function mutation!(genotype::BitMatrix,mu_m; mutation_type=:normal, kwargs...)
     end
 end
 
-function mutation!(genotype::Vector{Matrix},mu_m; mutation_type=:normal, kwargs...)
+function mutation!(genotype::Vector{Matrix},mu_m; mutation_type=Val(:normal), kwargs...)
     @inbounds for i in eachindex(genotype)
         mutation!(genotype[i], mu_m;mutation_type, kwargs...)
     end
 end
 
-function mutation!(genotype::Vector{Vector{Matrix}},mu_m; mutation_type=:normal, kwargs...)
+function mutation!(genotype::Vector{Vector{Matrix}},mu_m; mutation_type=Val(:normal), kwargs...)
     @inbounds for i in eachindex(genotype)
         for j in eachindex(genotype[i])
             mutation!(genotype[i][j], mu_m;mutation_type, kwargs...)
