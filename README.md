@@ -229,7 +229,7 @@ Column names are taken, in order of priority:
 
 #### Resolution handling
 
-You can choose whether results are recorded at the level of the **generation**, **patch**, or **individual** using the `log_by` parameter. If a variable is defined at a finer level than the requested output, it is averaged and renamed: `mean_<var>` for individual → patch or patch → generation, `global_mean_<var>` for individual → generation. If a variable is defined at a coarser level than the requested output, its value is repeated for the corresponding patches or individuals.
+You can choose whether results are recorded at the level of the **generation**, **patch**, or **individual** using the `log_by` parameter. If a variable is defined at a coarser level than the requested output, its value is repeated for the corresponding patches or individuals. If a variable is defined at a finer level than the requested output, it is averaged and renamed: `mean_<var>` for individual → patch or patch → generation, `global_mean_<var>` for individual → generation. If it is a discrete trait, the frequency of each possible value is recorded instead, with one column per value: `freq_<var>_val<value>` for individual → patch, `global_freq_<var>_val<value>` for individual → generation.
 
 Starting from the individual-level output shown above, changing the resolution to patch-level results (`log_by = 'p'`):
 

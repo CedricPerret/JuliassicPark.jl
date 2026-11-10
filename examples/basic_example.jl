@@ -180,7 +180,7 @@ a=2,c=1., threshold = 0.65)
 res=evol_model(parameters_example,threshold_public_good_game,reproduction_WF)
 
 #--- Results: Two equilibria. Some simulations converge toward enough cooperators, others to full defection
-@with res plot(:gen,:global_mean_z,group=:i_simul,ylims=[0,1],legends=false)
+@with res plot(:gen,:global_freq_z,group=:i_simul,ylims=[0,1],legends=false)
 
 #-----------------------------------------------
 #*** 4. Dyadic game
@@ -237,7 +237,7 @@ parameters_example = (
 #-> Results: Cooperation collapses in well-mixed population
 res = evol_model(parameters_example, fitness_function_dyadic_game, reproduction_WF)
 
-@with res plot(:gen, :global_mean_z, group = :i_simul, ylims = [0, 1], legend = false)
+@with res plot(:gen, :global_freq_z_1, group = :i_simul, ylims = [0, 1], legend = false)
 
 #-> Partial cooperation is maintained in presence of spatial structure
 parameters_example = (z_ini = 1, mu_m = 0.005, boundaries= [0,1],patch_size=10, log_by ='g',n_gen=2000, 
@@ -246,7 +246,7 @@ R = 4.75, S = 0, T = 5, P = 0,_payoff_matrix = Derived(define_payoff_matrix))
 
 res=evol_model(parameters_example,fitness_function_dyadic_game,reproduction_WF_island_model_hard_selection!)
 
-@with res plot(:gen,:global_mean_z,group=:i_simul,ylims=[0,1],legends=false)
+@with res plot(:gen,:global_freq_z_1,group=:i_simul,ylims=[0,1],legends=false)
 
 #-----------------------------------------------
 #*** 5. Conflict game

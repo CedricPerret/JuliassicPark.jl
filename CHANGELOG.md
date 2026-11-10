@@ -1,4 +1,9 @@
 # Changelog
+
+## [0.3.2] - 2026-11-10
+- Changed way of aggregating discrete data when `log_by = p` or `log_by = g` so it gives frequency of each possible strategy instead of mean. I did that by transforming the column of trait into x column of boolean for each possible value of trait. Then the code calculate the mean as usual which gives the frequency.  
+- Fix value of integer parameter in filename.
+
 ## [0.3.1] - 2026-11-03
 - Removed `delta` from deprecated, it easily conflict with user-defined parameter.
 - Added the mutation type `:normal_biased` (truncated `Normal((1 - epsilon_m) * x + bias_m, sigma_m)`) and added its parameter `epsilon_m` to mut_kwargs.

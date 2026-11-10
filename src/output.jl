@@ -21,7 +21,7 @@ function _abbreviate(x)
     if x isa Real
         if x >= 1000
             return(string((x/1000))*"k")
-        elseif (x%10==0)
+        elseif x isa Integer || x%10==0
             return(string(Int(x)))
         else
             return(string(round(x,digits=5)))
@@ -214,7 +214,7 @@ Trait values are extracted from the first element of `output_example`, and if th
 - `'i'`: Vector of `n_patch` vectors of length `n_pop` → individual-level (structured)
 - `'I'`: Vector of length `n_patch * n_pop` → individual-level (well-mixed)
 """
-function init_data_output(log_by,output_names::Vector{String},output_example,n_gen::Int, gen_first_print::Int, print_every::Int, i_simul, n_patch::Int, n_pop::Int, n_cst::Bool; output_cst_names=[],output_cst=[], n_traits)
+function init_data_output(log_by,output_names::Vector{String},output_example,n_gen::Int, gen_first_print::Int, print_every::Int, i_simul, n_patch::Int, n_pop::Int, n_cst::Bool; output_cst_names=[],output_cst=[], n_traits, boundaries)
     #--- Safety checks
     @assert log_by in ['g', 'p', 'i'] "Invalid value for `log_by`: expected one of 'g', 'p', or 'i'."
     @assert n_patch ≥ 1 "Expected `n_patch` to be a positive integer."
@@ -236,17 +236,39 @@ function init_data_output(log_by,output_names::Vector{String},output_example,n_g
     if length(output_names) < length(output_example) 
         output_names = [output_names;["V"*string(i) for i in 1:(length(output_example) -  length(output_names))]]
     end
-    #--- Multiple traits?
+    #--- Multiple traits? Discrete
     ## If yes, the first vector needs to be decoupled into one vector per trait.
     #@show output_example
-    correct_output_for_n_trait = _make_output_corrector(output_example[1],n_traits)
+    # correct_output_for_n_trait = _make_output_corrector(output_example[1],n_traits,log_by,boundaries)
+    # if n_traits > 1
+    #     output_names = [["z"*string(i) for i in 1:n_traits]; output_names[2:end]]
+    # end
+    correct_output_for_n_trait = _make_output_corrector(output_example[1], n_traits, log_by, boundaries)
     if n_traits > 1
-        output_names = [["z"*string(i) for i in 1:n_traits]; output_names[2:end]]
+        trait_names = ["z"*string(i) for i in 1:n_traits]
+    else
+        trait_names = [output_names[1]]
     end
+    ## For discrete trait, we want to output the frequency. 
+    # To do so, we transform the column with the trait into x columns with true or false for each possible trait value 
+    # The mean then gives the frequency directly
+    if log_by != 'i'
+        # Find the discrete traits
+        discrete_traits = isa.(get_ind(output_example[1]), Int)
+        # Loop in reverse since we insert as we go
+        for i in n_traits:-1:1
+            if discrete_traits[i]
+                new_names = [trait_names[i]*"_val"*string(j) for j in boundaries[i][1]:boundaries[i][2]]
+                splice!(trait_names, i, new_names)
+            end
+        end
+    end
+    output_names = [trait_names; output_names[2:end]]
+
     #--- Identify the resolution of the variables measured
     level_output = _infer_variable_resolution(correct_output_for_n_trait(output_example),n_patch=n_patch)
     type_output_cst = _infer_variable_resolution(output_cst,n_patch=n_patch)
-
+    is_freq = _leaf_type.(correct_output_for_n_trait(output_example)) .== Bool
     ## Each output is modified (correction_function) to fit the resolution required by the user.
     #*** Results required at the generation level
     if log_by == 'g'
@@ -262,6 +284,7 @@ function init_data_output(log_by,output_names::Vector{String},output_example,n_g
         'I'=>(x->mean(x)))
         ## with corresponding names
         output_names=string.(replace(level_output,'g'=>"",'G'=>"",'p'=>"mean_",'i'=>"global_mean_",'I'=>"global_mean_"),output_names)
+        output_names[is_freq] = replace.(output_names[is_freq], "mean_" => "freq_")
         #! We do not print the lower levels of details of the constant output
         cst_to_keep =  type_output_cst .∈ Ref(['g', 'G'])
         output_cst, output_cst_names, type_output_cst = getindex.((output_cst, output_cst_names, type_output_cst), Ref(cst_to_keep))
@@ -320,6 +343,7 @@ function init_data_output(log_by,output_names::Vector{String},output_example,n_g
         # 'I'=>(x->mean.(collect(Iterators.partition(x,n_pop)))))
         ## with corresponding names
         output_names = string.(replace(level_output,'g'=>"",'G'=>"",'p'=>"",'i'=>"mean_",'I'=>"mean_"),output_names)
+        output_names[is_freq] = replace.(output_names[is_freq], "mean_" => "freq_")
         #! We do not print the lower levels of details of the constant output
         cst_to_keep =  type_output_cst .∈ Ref(['g', 'G','p'])
         output_cst, output_cst_names, type_output_cst = getindex.((output_cst, output_cst_names, type_output_cst), Ref(cst_to_keep))
@@ -499,40 +523,71 @@ end
 
 
 """
-    _make_output_corrector(first_output::AbstractVector,n_traits:Int)
+    _make_output_corrector(z::AbstractVector, n_traits::Int, log_by, boundaries)
 
-Return a function `correct(output)::Vector` that:
-- splits the first element (traits) into one vector per trait if the trait type is a Tuple,
-- otherwise returns the output unchanged.
+Return a function `correct(output)::Vector` that prepares the traits (first element of `output`) for saving:
+- if there are several traits (tuples), splits them into one vector per trait,
+- if `log_by` is 'g' or 'p', replaces each discrete (Int) trait by one Bool vector per possible value. Their mean, computed afterwards, is the frequency of each value.
 
 Examples
 --------
 # population: Vector{Tuple}
-correct = _make_output_corrector([(0.1,0.2), (0.3,0.4)],2)
+correct = _make_output_corrector([(0.1,0.2), (0.3,0.4)], 2, 'i', nothing)
 correct([[ (0.1,0.2), (0.3,0.4) ], :foo])  # => [ [0.1,0.3], [0.2,0.4], :foo ]
 
 # metapopulation: Vector{Vector{Tuple}}
-correct = _make_output_corrector([[(0.1,0.2)], [(0.3,0.4)]],2)
+correct = _make_output_corrector([[(0.1,0.2)], [(0.3,0.4)]], 2, 'i', nothing)
 correct([[ [(0.1,0.2)], [(0.3,0.4)] ], :foo])  # => [ [[0.1],[0.3]], [[0.2],[0.4]], :foo ]
+
+# discrete trait 2 (Int, boundaries 1 to 3), log_by = 'g': one Bool vector per value 1, 2, 3
+correct = _make_output_corrector([(0.1,1), (0.3,3)], 2, 'g', [(0.0,1.0), (1,3)])
+correct([[ (0.1,1), (0.3,3) ], :foo])  # => [ [0.1,0.3], [true,false], [false,false], [false,true], :foo ]
 """
-function _make_output_corrector(z::AbstractVector, n_traits::Int)
-    n_traits == 1 && return identity
+function _make_output_corrector(z::AbstractVector, n_traits::Int, log_by, boundaries)
     # value-based: treat as metapop if first element is a vector
     is_metapop = !isempty(z) && first(z) isa AbstractVector
 
+    discrete_traits = isa.(get_ind(z), Int)
+    #-> Nothing to split or expand
+    if n_traits == 1 && (log_by == 'i' || !discrete_traits[1])
+        return identity
+    end
     if is_metapop
         #-> metapopulation: Vector{Vector{Tuple}}
         return function (output)
-            z = output[1]
-            per_trait = [map(p -> getfield.(p, i), z) for i in 1:n_traits]
+            local z = output[1]
+            per_trait = Any[map(p -> getindex.(p, i), z) for i in 1:n_traits]
+            if log_by != 'i'
+                ## We split the discrete traits 
+                # need to loop in reverse because splice will add
+                for i in length(per_trait):-1:1
+                    if discrete_traits[i]
+                        new_vectors = [map(p -> p .== j, per_trait[i]) for j in boundaries[i][1]:boundaries[i][2]]
+                        splice!(per_trait, i, new_vectors)
+                    end
+                end
+            end
             [per_trait; output[2:end]]
         end
     else
         #-> population: Vector{Tuple}
         return function (output)
-            z = output[1]
-            per_trait = [getfield.(z, i) for i in 1:n_traits]
+            local z = output[1]
+            per_trait = Any[getindex.(z, i) for i in 1:n_traits]
+            if log_by != 'i'
+                ## We split the discrete traits 
+                # need to loop in reverse because splice will add
+                for i in length(per_trait):-1:1
+                    if discrete_traits[i]
+                        new_vectors = [per_trait[i] .== j for j in boundaries[i][1]:boundaries[i][2]]
+                        splice!(per_trait, i, new_vectors)
+                    end
+                end
+            end
             [per_trait; output[2:end]]
         end
     end
 end
+
+
+

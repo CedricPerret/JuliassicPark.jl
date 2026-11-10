@@ -259,7 +259,7 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         if !in_place_fitness_function
             correction = _infer_fitness_function_correction(population,fitness_function, parameters,calculate_phenotype)
             instanced_fitness_function = preprocess_fitness_function(population_phenotype, fitness_function, parameters,correction)
-            output = [[population_phenotype]; instanced_fitness_function(population_phenotype; parameters...)]
+            output = Any[[population_phenotype]; instanced_fitness_function(population_phenotype; parameters...)]
         else
             correction = -1
             ## In-place fitness functions don’t return fitness values, so we cannot infer the correction.
@@ -271,7 +271,7 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
             """
             instanced_fitness_function = preprocess_fitness_function(population_phenotype, fitness_function, parameters,correction)
             fitness = vv(0.,population_phenotype)
-            output = [[population_phenotype,fitness]; instanced_fitness_function(population_phenotype, fitness; parameters...)]
+            output = Any[Any[population_phenotype,fitness]; instanced_fitness_function(population_phenotype, fitness; parameters...)]
         end
 
         fit = (output[2] isa AbstractVector && first(output[2]) isa AbstractVector) ? Iterators.flatten(output[2]) : output[2]
@@ -286,13 +286,13 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
             println("Too many extra output names were provided; the extras $extras_ignored are ignored")
         end
         
+        boundaries = n_traits == 1 ? [get(parameters, :boundaries, nothing)] : get(parameters, :boundaries, nothing)
         df_res, saver = init_data_output(
             parameters[:log_by], [["z", "fitness"]; extras_names],
             output, parameters[:n_gen], parameters[:log_from], parameters[:log_every],
             i_simul, parameters[:n_patch], parameters[:patch_size], parameters[:n_cst];
-            output_cst_names=cst_output_name, output_cst=cst_output, n_traits
+            output_cst_names=cst_output_name, output_cst=cst_output, n_traits, boundaries
         )
-
         ## To avoid passing unnecessary or unused parameters (which could cause errors or reduce clarity), we explicitly filter only the relevant keyword arguments from the main `parameters` dictionary.
         repro_kwargs_names = [:n_replacement,:transition_proba, :n_pop_by_class, :n_patch, :mig_rate,:group_fitness_fun,:n_loci]
         repro_kwargs = _filter_kwargs(parameters,repro_kwargs_names)
