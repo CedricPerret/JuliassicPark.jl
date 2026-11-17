@@ -491,7 +491,9 @@ To model a change during a simulation, run the first part, then give its result 
 
 ```julia
 res1 = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF!)
-res2 = evol_model((; parameters_example..., z_ini = res1, optimal = 0.8), gaussian_fitness_function, reproduction_WF!)
+parameters_example[:z_ini] = res1;
+parameters_example[:optimal] = 0.8; #The shock to apply
+res2 = evol_model(parameters_example, gaussian_fitness_function, reproduction_WF!)
 ```
 
 The last generation of `res1` is used as the starting population, and `res2` contains both parts, with generations continuing from the last one of `res1`.
