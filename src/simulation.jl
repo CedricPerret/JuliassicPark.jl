@@ -181,23 +181,17 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         end
         parameters,cst_output_name,cst_output = compute_derived_parameters!(parameters,derived_parameter_generators)
 
-        n_traits = 1
-        if parameters[:z_ini] isa DataFrame
-            n_traits = length(filter(c -> occursin(r"^z\d*$", c), names(parameters[:z_ini])))
-        ## Standardise z_ini
-        else
-            if !isa(parameters[:z_ini], Tuple)
-                #-> A single trait but z_ini is not a tuple. We ensure `z_ini` is always a tuple, even if the user provides a scalar (e.g. 0.5).
-                parameters[:z_ini] = tuple(parameters[:z_ini])
-            end
-            n_traits = length(parameters[:z_ini])
-        end
+        n_traits = _get_n_traits(parameters[:z_ini])
+
         ## If it continues previous simulations, the first generation is already contained in the previous dataframe, so we do "skip it"
         (parameters[:z_ini] isa DataFrame && parameters[:log_from] == 1) && (parameters[:log_from] += 1)
 
         #--- Normalise the trait relevant parameters (depending of number of traits, need to unwrap or copy) + reorganise them in the right format
-        mut_kwargs_names = [:sigma_m, :boundaries, :mutation_type,:bias_m, :epsilon_m] 
+        mut_kwargs_names = [:sigma_m, :boundaries, :mutation_type,:bias_m, :epsilon_m,] 
         _normalise_trait_parameters!(parameters,[:mu_m; mut_kwargs_names], n_traits)
+
+
+
         # If sigma_m is zero, set the corresponding mutation probability to zero.
         if haskey(parameters, :sigma_m) && parameters[:sigma_m] !== nothing
             if n_traits == 1
@@ -215,12 +209,12 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
             end
         end
 
-        ## Move from sigma_m = [sigma_m1,sigma_m2], bias_m = [bias_m1,bias_m2] to param_trait1 = [sigma_m = sigma_m1, bias_m=bias_m1]
-        ## which can be given as a whole to mutation
+        ## Generate one set of mutation parameters by trait: sigma_m = [sigma_m1,sigma_m2], bias_m = [bias_m1,bias_m2] -> mut_trait1 = [sigma_m = sigma_m1, bias_m=bias_m1]
         mut_kwargs = _prepare_kwargs_multiple_traits(parameters, mut_kwargs_names, n_traits)
         
+
         #--- Initialise the population 
-        population = initialise_population(parameters[:z_ini], parameters[:patch_size], parameters[:n_patch];  boundaries = get(parameters, :boundaries, nothing), flatten_single_patch = parameters[:flatten_single_patch],n_loci = parameters[:n_loci])
+        population = initialise_population(parameters[:z_ini], parameters[:patch_size], parameters[:n_patch];n_traits,  boundaries = get(parameters, :boundaries, nothing), flatten_single_patch = parameters[:flatten_single_patch],n_loci = parameters[:n_loci])
         
 
         #--- This is in case the user gives a single generator, not encapsulated in a vector because the expected input is a vector of generators for each trait. 

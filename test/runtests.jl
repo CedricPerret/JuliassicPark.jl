@@ -1,5 +1,6 @@
 using JuliassicPark
 using Test
+using Distributions
 
 """
 run_smoke_tests(parameters, fitness_function;
@@ -196,6 +197,39 @@ parameters_example_two = Dict(
 @testset "smoke tests – two traits" begin
     errors = run_smoke_tests(parameters_example_two, gaussian_fitness_function_two_traits)
     @test isempty(errors)
+end
+
+
+@testset "initial generators – two traits" begin
+    ## One generation only: the output is then the initial population
+    function initial_pop(z_ini)
+        params = deepcopy(parameters_example_two)
+        params[:z_ini] = z_ini
+        params[:n_gen] = 1
+        params[:log_by] = 'i'
+        params[:seed] = 1
+        evol_model(params, gaussian_fitness_function_two_traits, reproduction_WF)
+    end
+
+    #--- Same value for everyone
+    res = initial_pop((0.1, 0.1))
+    @test all(res.z1 .== 0.1) && all(res.z2 .== 0.1)
+
+    #--- Distributions, truncated to boundaries
+    res = initial_pop((Normal(0.5, 1.0), Normal(0.5, 1.0)))
+    @test all(0.0 .<= res.z1 .<= 1.0) && all(0.0 .<= res.z2 .<= 1.0)
+
+    #--- One generator per patch for trait 1
+    res = initial_pop(([Normal(0.2, 0.01), Normal(0.8, 0.01)], 0.5))
+    @test all(res.z1[res.patch .== 1] .< 0.5) && all(res.z1[res.patch .== 2] .> 0.5)
+
+    #--- Tuple of vectors: each trait drawn independently, so all four combinations appear
+    res = initial_pop(([0.2, 0.4], [0.6, 0.8]))
+    @test Set(zip(res.z1, res.z2)) == Set([(0.2, 0.6), (0.2, 0.8), (0.4, 0.6), (0.4, 0.8)])
+
+    #--- Vector of tuples: individuals drawn whole, so only the listed combinations appear
+    res = initial_pop([(0.2, 0.6), (0.4, 0.8)])
+    @test Set(zip(res.z1, res.z2)) == Set([(0.2, 0.6), (0.4, 0.8)])
 end
 
 

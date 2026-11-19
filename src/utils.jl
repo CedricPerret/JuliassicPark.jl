@@ -475,3 +475,22 @@ julia> lift_map(f, [[1, 2], [3, 4]])
 """
 @inline lift_map(f, pop::AbstractVector) = map(f, pop)
 @inline lift_map(f, pop::AbstractVector{<:AbstractVector}) = map(p -> lift_map(f, p), pop)
+
+"""
+    _get_n_traits(z_ini)
+
+Give the number of traits using the initial values/generators for it.
+"""
+function _get_n_traits(z_ini)
+    if z_ini isa DataFrame
+        #-> One column per trait: z, or z1, z2, ...
+        return length(filter(c -> occursin(r"^z\d*$", c), names(z_ini)))
+    elseif z_ini isa AbstractVector{<:Tuple}
+        #-> A vector of complete trait combinations
+        return length(first(z_ini))
+    elseif z_ini isa Tuple
+        return length(z_ini)
+    else
+        return 1
+    end
+end

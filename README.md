@@ -99,7 +99,7 @@ Note that:
 
 ## Status and feedback
 
-JuliassicPark is currently in a beta `0.x` stage. The main features are implemented and it currently handles continuous and discrete traits, single or multiple traits, phenotypes or explicit multilocus genotypes, structured populations, and a range of reproduction schemes (Wright–Fisher, Moran, explicit agent-based, sexual).
+JuliassicPark is currently in a beta `0.x` stage. See [Features](#features) for everything the package handles.
 
 I use it for my own research, but it has not been heavily tested across a wide range of models. If you run into errors, unexpected behaviour, or have suggestions, please contact me at cedric.perret.research [at] gmail [dot] com.
 
@@ -126,7 +126,7 @@ The value(s) of `z_ini` set the initial value(s) of the trait:
 
 The values of `boundaries` determine the possible trait values (e.g. `(1, 5)` → {1,2,3,4,5} for Integer, and any number between 1 and 5 for Float). This is not required for Boolean traits. 
 
-For [Multiple Traits](#multiple-traits), use a tuple. Each element defines one trait. For example, `z_ini = (0.5, 2)` means that each individual carries one continuous and one discrete trait. 
+For [Multiple Traits](#multiple-traits), use a tuple of generators (one per trait, sampled independently) or a vector of tuples (each individual is randomly drawn as a complete tuple from the vector). For example, `z_ini = (0.5, 2)` gives every individual one continuous and one discrete trait, while `z_ini = [(0.5, 2), (0.8, 3)]` randomly assigns each individual one of these two combinations.
 
 #### Mutation
 
@@ -187,7 +187,7 @@ You are ready to run the simulations. To change settings, like make the simulati
 print_default_parameters()         # Print default values
 get_default_parameters()           # Access current defaults
 ```
-To change the defaults for future simulations (see [Workflow](#Workflow)), use:
+To change the defaults for future simulations (see [Workflow](#workflow)), use:
 ```julia
 set_default_parameters!(...)       # Override defaults globally
 reset_default_parameters!()        # Reset to built-in defaults
@@ -251,7 +251,7 @@ Here, `global_mean_z` is the average of **all individuals in the population**.
 
 #### Writing on disk
 
-If `write_file = true`, results are saved to disk in a CSV file named `name_model-param1=value1-param2=value2-...csv` (see [Loading the data in R](#Loading_the_data_in_R) to import many of them in R).
+If `write_file = true`, results are saved to disk in a CSV file named `name_model-param1=value1-param2=value2-...csv` (see [Loading the data in R](#loading-the-data-in-r) to import many of them in R).
 
 Use the field `parameters_to_omit` to exclude parameters from the filename.
 
@@ -263,7 +263,7 @@ To keep filenames short:
 
 #### Saving multiple runs
 
-By default, multiple runs are saved on the same file. Set `split_rep = true` to save each replicate on a different file, and `split_sweep = true` to save each parameter combination on a different file (see [Parameter sweep](#Parameter_sweep))
+By default, multiple runs are saved on the same file. Set `split_rep = true` to save each replicate on a different file, and `split_sweep = true` to save each parameter combination on a different file (see [Parameter sweep](#parameter-sweep))
 
 
 ---
@@ -279,6 +279,8 @@ Multiple traits are represented internally as tuples. To include several traits,
 ```julia
 z_ini = (true, 0.2, 2)
 ```
+
+To start from a set of complete individuals instead, give a vector of tuples with each representing a potential individual. Each individual is drawn whole from it. All tuples must have the same number and types of traits.
 
 #### Mutations
 
@@ -682,7 +684,7 @@ sweep=Dict{Symbol, Vector}(), migration_function = nothing, genotype_to_phenotyp
 |-----------------------|------------------------------|-----------------------------------------------------------------------------|
 | `parameters`          | `Dict` or `NamedTuple`       | All model settings: initial traits, population size, mutation rules, etc. See [Running simulation](#running-simulation). |
 | `fitness_function`    | `Function`                   | User-defined function that returns fitness (and optionally extra variables). See [What happens at each generation](#what-happens-at-each-generation).        |
-| `reproduction_method` | `Function`       | Function describing how the next generation is built depending on the fitness. Built-in name (e.g. `reproduction_WF!`) or custom function. See [Reproduction](#reproduction). |
+| `reproduction_method` | `Function`       | Function describing how the next generation is built depending on the fitness. Built-in name (e.g. `reproduction_WF!`) or custom function. See [Generating the next generation](#generating-the-next-generation). |
 
 #### Optional:
 | Argument              | Type                         | Description                                                                 |
@@ -722,7 +724,39 @@ flatten_single_patch                  => Flatten population if there is a single
 seed                     => Optional random seed. One integer for a single simulation, or a vector of seeds for multiple simulations. Generated randomly if omitted.
 ```
 
+---
+## Features
 
+**Traits**
+- Continuous (`Float64`), discrete (`Int`) and binary (`Bool`) traits, set by the type of `z_ini` — [Defining traits](#defining-traits)
+- Several traits per individual, of mixed types — [Multiple traits](#multiple-traits)
+- Initial values from a single value, a vector, a distribution, one generator per patch, a list of whole individuals, or the last generation of a previous run — [Defining traits](#defining-traits), [Model a shock](#model-a-shock)
+- Mutation by flipping (`Bool`), redrawing within bounds (`Int`), or one of four kernels for continuous traits — [Mutation](#mutation)
+- Diploid genotypes with one or several loci, mapped to phenotypes — [Sexual reproduction](#sexual-reproduction--multiple-loci)
+
+**Fitness**
+- Written for one individual, one group, or the whole metapopulation — [What happens at each generation](#what-happens-at-each-generation)
+- Extra variables saved with fitness, computed only on generations that are saved — [Choosing what to record](#choosing-what-to-record), [Compute extras only when needed](#compute-extras-only-when-needed)
+- In-place fitness functions — [In-place fitness functions](#in-place-fitness-functions)
+
+**Population and reproduction**
+- A single population or several patches (`n_patch`, `patch_size`)
+- Wright–Fisher, Moran (death–birth, birth–death), pairwise learning, island models (hard selection, soft selection, fixed migrant fraction), Poisson offspring numbers (patch sizes can change), sexual reproduction; `list_reproduction_methods()` lists them — [Generating the next generation](#generating-the-next-generation)
+- Migration inside reproduction or as a separate step — [Migration](#migration)
+
+**Running simulations**
+- Replicates with reproducible seeds (`n_rep`, `seed`)
+- Parameter sweeps, as a full grid or matched by position — [Parameter sweep](#parameter-sweep)
+- Threads or distributed workers — [Parallelisation and output splitting](#parallelisation-and-output-splitting)
+- Parameters computed at the start of each run (`Derived`) — [Parameters derived at runtime](#parameters-derived-at-runtime)
+- Checks on parameters before running — [Setting parameter constraints](#setting-parameter-constraints)
+- Continuing a run with new parameters — [Model a shock](#model-a-shock)
+- Defaults set once for a session (`set_default_parameters!`) — [Workflow](#workflow)
+
+**Output**
+- A `DataFrame` by individual, patch or generation, with means and frequencies computed for you — [Resolution handling](#resolution-handling)
+- CSV files named after their parameters, in one file or split by parameter set and replicate — [Writing on disk](#writing-on-disk), [Saving multiple runs](#saving-multiple-runs)
+- Import into R — [Loading the data in R](#loading-the-data-in-r)
 
 ---
 

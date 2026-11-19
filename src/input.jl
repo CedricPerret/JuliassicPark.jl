@@ -3,7 +3,7 @@
 #-----------------------------------------------
 
 """
-    initialise_population(z_ini, patch_size, n_patch; boundaries = nothing, flatten_single_patch = true, n_loci = 0)
+    initialise_population(z_ini, patch_size, n_patch; n_traits = _get_n_traits(z_ini), boundaries = nothing, flatten_single_patch = true, n_loci = 0)
 
 Initialise a population.
 
@@ -12,18 +12,20 @@ Arguments
     - Number (copied to all individuals)
     - AbstractVector (sampled; if length == 1 it is treated as a single individual to copy)
     - Distributions.Distribution (sampled; truncated if boundaries are given)
-    - Tuple of per-trait sources, one entry per trait
+    - Tuple of per-trait sources, one entry per trait (each trait is sampled independently)
+    - Vector of tuples, one tuple per individual (individuals are sampled whole, so only the listed trait combinations appear). Not implemented for diploids (n_loci > 0).
     - DataFrame 
-      In this case the last generation is used. The table is authoritative and patch_size, boundaries, and n_loci are ignored.
+      In this case the last generation is used. The table is authoritative and patch_size, n_traits, boundaries, and n_loci are ignored.
 - patch_size::Int: Number of individuals per patch when sampling or copying.
 - n_patch::Int: Number of patches.
+- n_traits::Int: Number of traits. Guessed from z_ini if not given.
 - boundaries: Per-trait bounds. For one trait pass [min, max] or (min, max). For multiple traits pass one [min, max] per trait.
 - flatten_single_patch::Bool: If true and n_patch == 1, return a single vector of individuals. Faster for downstream functions, but outputs have less uniform dimensions.
 - n_loci::Int: Number of loci for diploids. If > 0, each individual stores an n_loci × 2 genotype per trait.
 
 Returns
 - population: A vector of patches, each a vector of individuals. If flatten_single_patch == true and n_patch == 1, returns a single vector.
-  Individuals are Float64 for one trait, or tuples for multiple traits. With n_loci > 0, entries are genotype arrays.
+  Individuals are single values for one trait, or tuples for multiple traits. With n_loci > 0, entries are genotype arrays.
 
 Examples
 
@@ -39,6 +41,9 @@ initialise_population([1.0, 2.0, 3.0], 5, 2)
 # Two traits, independent sources
 initialise_population((Normal(0, 1), [0.5, 1.0, 1.5]), 5, 2; boundaries = [(-2.0, 2.0), (0.0, 2.0)])
 
+# Two traits, whole individuals: only (0.1, true) and (0.9, false) appear
+initialise_population([(0.1, true), (0.9, false)], 5, 2; boundaries = [(0.0, 1.0), nothing])
+
 # Diploid with two loci
 initialise_population(Normal(0, 1), 5, 2; boundaries = [-1.0, 1.0], n_loci = 2)
 
@@ -48,7 +53,9 @@ initialise_population([Normal(1.,0.1),Normal(0.2,0.001)], 5, 2; boundaries = [0.
 initialise_population([[1.0],[0.5]], 5, 2; boundaries = [0.0, 2.0])
 
 """
-function initialise_population(z_ini::DataFrame, patch_size::Int, n_patch::Int; boundaries=nothing, flatten_single_patch=true, n_loci=0)
+
+#--- From a previous run: the table decides everything
+function initialise_population(z_ini::DataFrame, patch_size::Int, n_patch::Int;n_traits = nothing, boundaries=nothing, flatten_single_patch=true, n_loci=0)
     # This is better than guessing from the vector dimensions as if n_cst = false, we can't infer when the input needs to be sampled or taken as it is.
     population = get_pop_at_last_gen(z_ini)
     if flatten_single_patch && n_patch == 1 && length(population) == 1
@@ -58,19 +65,40 @@ function initialise_population(z_ini::DataFrame, patch_size::Int, n_patch::Int; 
 end
 
 
-function initialise_population(z_ini, patch_size, n_patch::Int; boundaries=nothing, flatten_single_patch = true, n_loci = 0)
-    n_trait = z_ini isa Tuple ? length(z_ini) : 1
+#--- From a list of individuals, each drawn whole
+function initialise_population(z_ini::AbstractVector{<:Tuple{Vararg{Real}}}, patch_size, n_patch::Int; n_traits = _get_n_traits(z_ini), boundaries=nothing, flatten_single_patch=true, n_loci=0)
+    @assert n_loci == 0 "A vector of tuples as z_ini is not implemented for diploids (n_loci > 0)."
+    ## Every individual must have the same type, so each trait has a single type.
+    @assert my_allequal(typeof.(z_ini)) "All individuals in z_ini must have the same number of traits and the same type for each trait. Found: $(join(unique(typeof.(z_ini)), ", "))."
+    ## Check traits proposed are within boundaries
+    # here it is easier to first check all boundaries since we will sample in it. (in the next case we generate and compare)
+    if boundaries !== nothing
+        boundaries[1] isa Real && (boundaries = fill(boundaries, n_traits))
+        for z_i in z_ini, j in eachindex(z_i)
+            @assert boundaries[j] === nothing || boundaries[j][1] <= z_i[j] <= boundaries[j][2] "Initial values out of bounds."
+        end
+    end
+
+    population = [rand(z_ini, patch_size) for i_patch in 1:n_patch]
+    (flatten_single_patch && n_patch == 1) && (population = only(population))
+
+    return population
+end
+
+#--- From one generator per trait
+function initialise_population(z_ini, patch_size, n_patch::Int; n_traits = _get_n_traits(z_ini), boundaries=nothing, flatten_single_patch = true, n_loci = 0)
     #--- We wrap the boundaries the time of the initialisation (cannot wrap the parameter before because with a single trait, population simplifies to scalar rather than tuple)
     ## We want to get one generator per patch per trait.
     z_ini_complete = z_ini isa Tuple ? collect(Any, z_ini) : Any[z_ini]
+    @assert length(z_ini_complete) == n_traits "z_ini gives $(length(z_ini_complete)) trait(s) but n_traits = $n_traits."
     #--- If only one boundary set is given, we either replicate or wrap it. 
     ## Already handled by _normalise_trait_parameters but useful to have it here for direct calls
     ## - If boundaries are missing, fill with `nothing`.
     ## - If a single pair of limits is given, replicate it for all traits.
     if boundaries === nothing
-        boundaries = fill(nothing, n_trait)
+        boundaries = fill(nothing, n_traits)
     elseif boundaries[1] isa Real
-        boundaries = [boundaries for _ in 1:n_trait]
+        boundaries = [boundaries for _ in 1:n_traits]
     end
 
     ## Here, it would make sense and is more elegant to consider that asexual reproduction is one loci for haploid (direct mapping)
@@ -83,7 +111,7 @@ function initialise_population(z_ini, patch_size, n_patch::Int; boundaries=nothi
     ## Note that it is not possible to give a single Real per patch,
     ## as this conflicts with the logic used to sample from a random vector.
     ## This can still be done by providing a vector of one element for each patch.
-    for i_trait in 1:n_trait
+    for i_trait in 1:n_traits
         if !(z_ini_complete[i_trait] isa AbstractVector) || eltype(z_ini_complete[i_trait]) <: Real
              #-> Case 1: single generator or a flat vector of values
             z_ini_complete[i_trait] = [z_ini_complete[i_trait] for _ in 1:n_patch]
@@ -97,10 +125,10 @@ function initialise_population(z_ini, patch_size, n_patch::Int; boundaries=nothi
     populations = [[
         [_generate_trait(z_ini_complete[i_trait][i_patch];
             boundaries=boundaries[i_trait], n_loci=n_loci_temp, ploidy=ploidy) for i_ind in 1:patch_size] for i_patch in 1:n_patch]
-        for i_trait in 1:n_trait]
+        for i_trait in 1:n_traits]
     
     #--- Restructure the population obtained
-    if n_trait > 1
+    if n_traits > 1
         population = [Tuple.(invert(getindex.(populations, i))) for i in 1:n_patch]
     else
         #-> No tuple. Each individual is a scalar.
@@ -587,7 +615,7 @@ _prepare_kwargs_multiple_traits(parameters, kwarg_names, 2)
 """
 function _prepare_kwargs_multiple_traits(parameters, kwarg_names::Vector{Symbol}, n_traits)
     kwargs = _filter_kwargs(parameters, kwarg_names)
-    if n_traits == 1
+    if n_traits == 1 
         return kwargs
     else
         per_trait = [ (; (k => v[i] for (k,v) in zip(keys(kwargs), values(kwargs)) if v[i] !== nothing)...) 
@@ -595,6 +623,39 @@ function _prepare_kwargs_multiple_traits(parameters, kwarg_names::Vector{Symbol}
         return (; (Symbol("mutation_parameter_$(i)") => per_trait[i] for i in 1:n_traits)...)
     end
 end
+
+# function _prepare_kwargs_multiple_traits(parameters, kwarg_names::Vector{Symbol}, n_traits)
+#     kwargs = _filter_kwargs(parameters, kwarg_names)
+#     if n_traits == 1 || parameters[:mutation_type] in ["correlated_normal","multivnormal"]
+#         return kwargs
+#     else
+#         per_trait = [ (; (k => v[i] for (k,v) in zip(keys(kwargs), values(kwargs)) if v[i] !== nothing)...) 
+#                       for i in 1:n_traits ]
+#         return (; (Symbol("mutation_parameter_$(i)") => per_trait[i] for i in 1:n_traits)...)
+#     end
+# end
+
+
+# function _prepare_kwargs_multiple_traits(parameters, kwarg_names::Vector{Symbol}, n_traits)
+#     kwargs = _filter_kwargs(parameters, kwarg_names)
+#     if parameters[:mutation_type] == "correlated_normal"
+#         #-> There was no need to replicate mu_m and sigma_m
+#         kwargs[:mu_m] = first(kwargs[:mu_m]); kwargs[:sigma_m] = first(kwargs[:sigma_m])
+#         return kwargs
+#     else
+#         #-> We want one set of parameter for each trait
+#         if n_traits == 1 
+#             return kwargs
+#         else
+#             per_trait = [ (; (k => v[i] for (k,v) in zip(keys(kwargs), values(kwargs)) if v[i] !== nothing)...) 
+#                         for i in 1:n_traits ]
+#             return (; (Symbol("mutation_parameter_$(i)") => per_trait[i] for i in 1:n_traits)...)
+#         end
+#     end
+# end
+
+
+
 
 
 """
@@ -631,6 +692,8 @@ function _normalise_trait_parameters!(parameters,kwargs_names, n_traits)
         end
     end
 end
+
+
 
 
 #-----------------------------------------------

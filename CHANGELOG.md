@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3] - 2026-11-19
+### Added
+- New method to generate population where `z_ini` can be a vector of tuples. Each element represent one potential individuals and the population is drawn from it.
+- For clarity, `initialise_population` takes an optional `n_traits` keyword. If it is not given, it is guessed from `z_ini`. and `n_traits` is found by a function in utils
+
+### Changed
+- A scalar `z_ini` is no longer wrapped in a tuple internally: a fitness function that reads `z_ini` receives it as given (e.g. `0.1` instead of `(0.1,)`).
+
 ## [0.3.2] - 2026-11-10
 - Changed way of aggregating discrete data when `log_by = p` or `log_by = g` so it gives frequency of each possible strategy instead of mean. I did that by transforming the column of trait into x column of boolean for each possible value of trait. Then the code calculate the mean as usual which gives the frequency.  
 - Fix value of integer parameter in filename.
