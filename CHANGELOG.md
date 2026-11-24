@@ -4,6 +4,7 @@
 ### Added
 - New method to generate population where `z_ini` can be a vector of tuples. Each element represent one potential individuals and the population is drawn from it.
 - For clarity, `initialise_population` takes an optional `n_traits` keyword. If it is not given, it is guessed from `z_ini`. and `n_traits` is found by a function in utils
+- Simulation and input changed so that it can now apply mutation per individual (rather than per trait). useful for correlated mutation. No mutation yet implemented.
 
 ### Changed
 - A scalar `z_ini` is no longer wrapped in a tuple internally: a fitness function that reads `z_ini` receives it as given (e.g. `0.1` instead of `(0.1,)`).

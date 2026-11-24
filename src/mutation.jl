@@ -296,6 +296,3 @@ function mutation!(genotype::Vector{Vector{Matrix}},mu_m; mutation_type=Val(:nor
 end
 
 
-
-
-

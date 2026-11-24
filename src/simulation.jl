@@ -183,18 +183,16 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
 
         n_traits = _get_n_traits(parameters[:z_ini])
 
-        ## If it continues previous simulations, the first generation is already contained in the previous dataframe, so we do "skip it"
-        (parameters[:z_ini] isa DataFrame && parameters[:log_from] == 1) && (parameters[:log_from] += 1)
-
         #--- Normalise the trait relevant parameters (depending of number of traits, need to unwrap or copy) + reorganise them in the right format
-        mut_kwargs_names = [:sigma_m, :boundaries, :mutation_type,:bias_m, :epsilon_m,] 
-        _normalise_trait_parameters!(parameters,[:mu_m; mut_kwargs_names], n_traits)
-
+        ## We make the difference between independant mutation to each trait vs one mutation function per individual
+        is_joint = get(parameters, :mutation_type, nothing) in [:correlated_normal]
+        per_trait_names = is_joint ? [:boundaries, :bias_m, :epsilon_m] : [:mu_m, :sigma_m, :mutation_type, :boundaries, :bias_m, :epsilon_m]
+        _normalise_trait_parameters!(parameters, per_trait_names, n_traits)
 
 
         # If sigma_m is zero, set the corresponding mutation probability to zero.
         if haskey(parameters, :sigma_m) && parameters[:sigma_m] !== nothing
-            if n_traits == 1
+            if n_traits == 1 || is_joint 
                 parameters[:sigma_m] == 0. && (parameters[:mu_m] = 0.0)
             else
                 parameters[:mu_m] = [s == 0.0 ? 0.0 : m for (m, s) in zip(parameters[:mu_m], parameters[:sigma_m])]
@@ -202,7 +200,7 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         end
         # Mutation type as a Val, made once for the whole run (see _as_val in the mutation file)
         if haskey(parameters, :mutation_type)
-            if n_traits == 1
+            if n_traits == 1 || is_joint 
                 parameters[:mutation_type] = _as_val(parameters[:mutation_type])
             else
                 parameters[:mutation_type] = _as_val.(parameters[:mutation_type])
@@ -210,7 +208,9 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
         end
 
         ## Generate one set of mutation parameters by trait: sigma_m = [sigma_m1,sigma_m2], bias_m = [bias_m1,bias_m2] -> mut_trait1 = [sigma_m = sigma_m1, bias_m=bias_m1]
-        mut_kwargs = _prepare_kwargs_multiple_traits(parameters, mut_kwargs_names, n_traits)
+        #extra besides mu_m
+        mut_kwargs_names = [:sigma_m, :mutation_type, :boundaries, :bias_m, :epsilon_m, :rho_m] 
+        mut_kwargs = _prepare_kwargs_multiple_traits(parameters, mut_kwargs_names, is_joint ? 1 : n_traits)
         
 
         #--- Initialise the population 
@@ -351,16 +351,17 @@ function get_template_model(parameters_input, fitness_function, repro_function; 
                 end
             end
         end
+
         if parameters[:z_ini] isa DataFrame
             df_first = parameters[:z_ini]
-            df_res.gen .+= maximum(df_first.gen) - 1
-            ## We duplicated the last/first generation so we remove it here.
-            append!(df_first, df_res; promote=true, cols=:union)        
-            ## Homogeneise the id_simul    
+            ## The first recorded generation is the population right after the shock: it comes one generation after the last one of the previous run
+            df_res.gen .+= maximum(df_first.gen)
+            append!(df_first, df_res; promote=true, cols=:union)
+            ## Homogeneise the id_simul
             df_first.i_simul .= i_simul
-            
             df_res = df_first
         end
+
         return df_res
     end
     return model
